@@ -4,9 +4,13 @@ import { Inter } from "next/font/google";
 import { Toaster } from "@/components/ui/toaster";
 import Footer from "@/components/ui/Footer";
 import FloatingSubmitButton from "@/components/FloatingSubmitButton";
+import { RealtimeProvider } from "@/contexts/RealtimeContext";
 import { ServiceWorkerProvider } from "@/components/ServiceWorkerProvider";
+import GlobalRealtimeRefresher from "@/components/GlobalRealTimeRefresher";
 
 const inter = Inter({ subsets: ["latin"] });
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 export const metadata: Metadata = {
   title: "The Ultimate P100 List Library",
@@ -35,14 +39,17 @@ export default function RootLayout({
         <link rel="preload" href="/homepage.png" as="image" />
         <link rel="preload" href="/favicon.ico" as="image" />
       </head>
-      <body className={`${inter.className} bg-black text-white min-h-screen flex flex-col`}>
+       <body className={`${inter.className} bg-black text-white min-h-screen flex flex-col`}>
         <ServiceWorkerProvider>
+          <RealtimeProvider>
+            <GlobalRealtimeRefresher />
             <FloatingSubmitButton />
             <div className="flex-1">
               {children}
             </div>
             <Footer />
             <Toaster />
+          </RealtimeProvider>
         </ServiceWorkerProvider>
       </body>
     </html>

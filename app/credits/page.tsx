@@ -2,6 +2,9 @@ import Image from "next/image";
 import Navigation from "@/components/ui/Navigation";
 import BackgroundWrapper from "@/components/BackgroundWrapper";
 
+export const dynamic = 'force-dynamic';
+
+
 export default function CreditsPage() {
   return (
     <BackgroundWrapper>

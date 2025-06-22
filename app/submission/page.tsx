@@ -6,6 +6,9 @@ import Navigation from '@/components/ui/Navigation';
 import BackgroundWrapper from '@/components/BackgroundWrapper';
 import Image from 'next/image';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0; // Revalidate every request
+
 interface Character {
   id: string;
   name: string;

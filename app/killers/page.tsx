@@ -5,7 +5,9 @@ import BackgroundWrapper from "@/components/BackgroundWrapper";
 import { createServerClient } from "@/lib/supabase-client";
 import { Character } from "@/lib/data";
 
-export const revalidate = 3600; // Revalidate every hour
+export const dynamic = 'force-dynamic';
+
+export const revalidate = 0;  // Revalidate every request
 
 async function getKillers(): Promise<Character[]> {
   try {

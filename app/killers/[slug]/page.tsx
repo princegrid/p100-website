@@ -9,6 +9,9 @@ import { getCharacterNavigation } from '@/lib/character-navigation';
 import { getArtistInfoFromUrl, preloadArtistInfo } from '@/lib/artists-compat';
 import { analyzeCharacterArtworks, logDetailedArtworkAnalysis } from '@/lib/artist-analytics';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0; 
+
 // Helper function to extract artist name from legacy header URL
 function getArtistFromLegacyUrl(url: string): string {
   // Extract artist info using the existing utility function

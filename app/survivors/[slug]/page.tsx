@@ -9,6 +9,9 @@ import { createServerClient } from '@/lib/supabase-client';
 import { getCharacterNavigation } from '@/lib/character-navigation';
 import { getArtistInfoFromUrl, preloadArtistInfo } from '@/lib/artists-compat';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0; 
+
 // Define types for our data
 interface P100Player {
   id: string;
