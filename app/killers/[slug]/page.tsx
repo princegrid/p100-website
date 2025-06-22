@@ -1,0 +1,552 @@
+import { notFound } from 'next/navigation';
+import Image from 'next/image';
+import Link from 'next/link';
+import Navigation from '@/components/ui/Navigation';
+import BackgroundWrapper from '@/components/BackgroundWrapper';
+import CharacterNavigation from '@/components/CharacterNavigation';
+import { createServerClient } from '@/lib/supabase-client';
+import { getCharacterNavigation } from '@/lib/character-navigation';
+import { getArtistInfoFromUrl, preloadArtistInfo } from '@/lib/artists-compat';
+import { analyzeCharacterArtworks, logDetailedArtworkAnalysis } from '@/lib/artist-analytics';
+
+// Helper function to extract artist name from legacy header URL
+function getArtistFromLegacyUrl(url: string): string {
+  // Extract artist info using the existing utility function
+  const artistInfo = getArtistInfoFromUrl(url);
+  return artistInfo.artistName || 'Artist';
+}
+
+// Helper function to get artist URL from legacy header URL
+function getArtistUrlFromLegacyUrl(url: string): string | null {
+  const artistInfo = getArtistInfoFromUrl(url);
+  return artistInfo.artistUrl || null;
+}
+
+// Helper function to check if legacy header should be displayed
+function shouldDisplayLegacyHeader(legacy_header_urls: string[] | null | undefined): boolean {
+  return legacy_header_urls !== null && 
+         legacy_header_urls !== undefined && 
+         legacy_header_urls.length >= 2 &&
+         !!legacy_header_urls[0] && 
+         !!legacy_header_urls[1];
+}
+
+// Define types for our data
+interface P100Player {
+  id: string;
+  username: string;
+  added_at: string;
+  p200: boolean | null;
+}
+
+interface KillerData {
+  id: string;
+  name: string;
+  image_url: string;
+  header_url?: string | null;
+  artist_urls?: string[] | null;
+  legacy_header_urls?: string[] | null;
+  players: P100Player[];
+  background_image_url?: string;
+}
+
+// Generate static params for all killers
+export async function generateStaticParams() {  try {
+    const supabase = createServerClient();
+    const { data: killers, error } = await supabase
+      .from('killers')
+      .select('id')
+      .order('id');
+    
+    if (error) {
+      console.error('Error fetching killers for static params:', error);
+      return [];
+    }
+    
+    if (!killers || killers.length === 0) {
+      console.warn('No killers found in database for static params');
+      return [];
+    }
+      return killers.map(killer => ({
+      slug: killer.id
+    }));
+  } catch (error) {
+    console.error('Unexpected error in generateStaticParams:', error);
+    return [];
+  }
+}
+
+// Fetch data for the specific killer
+async function getKillerData(slug: string): Promise<KillerData | null> {
+  const supabase = createServerClient();  const { data: killer, error: killerError } = await supabase
+    .from('killers')
+    .select('id, name, image_url, created_at, updated_at, order, background_image_url, header_url, artist_urls, legacy_header_urls')
+    .eq('id', slug)
+    .single();
+  
+  if (killerError) {
+    console.error('Error fetching killer:', killerError);
+    return null;
+  }
+  if (!killer) {
+    console.log('No killer found for slug:', slug);
+    return null;  }
+  
+  // Get P100 players for this killer - try both the killer.id and killer.name.toLowerCase()
+  let players: any[] = [];
+  const { data: playersById, error: playersByIdError } = await supabase
+    .from('p100_players')
+    .select('*')
+    .eq('killer_id', killer.id)
+    .order('added_at', { ascending: true });
+  if (playersByIdError) {
+    console.error('Error fetching players by ID:', playersByIdError);
+  } else if (playersById && playersById.length > 0) {
+    players = playersById;
+  } else {
+    // Try with killer name in lowercase as fallback
+    const killerNameLower = killer.name.toLowerCase();
+    
+    const { data: playersByName, error: playersByNameError } = await supabase
+      .from('p100_players')
+      .select('*')
+      .eq('killer_id', killerNameLower)
+      .order('added_at', { ascending: true });
+    
+    if (playersByNameError) {
+      console.error('Error fetching players by name:', playersByNameError);
+    } else {
+      players = playersByName || [];
+    }  }  
+  // Artwork is now handled through artist_urls column in killers table
+  
+  // Parse artist_urls if it's a JSON string
+  let parsedArtistUrls = null;
+  if (killer.artist_urls) {
+    try {      parsedArtistUrls = typeof killer.artist_urls === 'string' 
+        ? JSON.parse(killer.artist_urls) 
+        : killer.artist_urls;
+      console.log('✓ Identified artist names:', parsedArtistUrls?.length || 0, 'URLs from killer data');
+    } catch (error) {
+      console.error('Error parsing artist_urls:', error);
+    }
+  }
+  return {
+    ...killer,
+    artist_urls: parsedArtistUrls,
+    players: players || []
+  };
+}
+
+export default async function KillerPage({ params }: { params: { slug: string } }) {
+  const killerData = await getKillerData(params.slug);
+  
+  if (!killerData) {
+    notFound();
+  }
+  
+  // Get navigation data
+  const navigation = await getCharacterNavigation(params.slug, 'killer');
+  
+  // Preload artist data for better performance
+  const urlsToPreload: string[] = [];
+  
+  if (killerData.legacy_header_urls) {
+    urlsToPreload.push(...killerData.legacy_header_urls);
+  }
+  
+  if (killerData.artist_urls) {
+    urlsToPreload.push(...killerData.artist_urls);
+  }
+  
+  if (urlsToPreload.length > 0) {
+    await preloadArtistInfo(urlsToPreload);
+  }
+  
+  // Analyze artworks and log detailed information
+  const analytics = await analyzeCharacterArtworks(
+    killerData.id,
+    killerData.name,
+    'killer',
+    killerData.artist_urls || []
+  );
+  
+  logDetailedArtworkAnalysis(analytics);
+
+  return (
+    <>
+      <BackgroundWrapper 
+        characterId={killerData.id}
+        backgroundUrl={killerData.background_image_url}
+      >
+        <CharacterNavigation previous={navigation.previous} next={navigation.next} />
+        
+        <main className="container mx-auto px-4 py-8 pt-16 sm:pt-20">
+          <Navigation />          {/* Centered content wrapper with side artwork */}
+          <div className="max-w-4xl mx-auto relative">
+            
+            {/* Legacy Header Layout - Two flanking images with welcome text */}
+            {shouldDisplayLegacyHeader(killerData.legacy_header_urls) ? (
+              <div className="mb-12">                {/* Desktop Layout */}
+                <div className="hidden md:flex items-center justify-center gap-8 mb-8">
+                  {/* Left Image - Artwork */}
+                  <div className="flex-shrink-0">                    {getArtistUrlFromLegacyUrl(killerData.legacy_header_urls![0]) ? (
+                      <a 
+                        href={getArtistUrlFromLegacyUrl(killerData.legacy_header_urls![0])!} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="block hover:opacity-90 transition-opacity"
+                      >
+                        <div className="relative w-48 h-64 overflow-hidden rounded-lg shadow-lg">
+                          <Image
+                            src={killerData.legacy_header_urls![0]}
+                            alt={`${killerData.name} artwork`}
+                            fill
+                            className="object-contain"
+                            priority
+                          />
+                        </div>
+                      </a>
+                    ) : (
+                      <div className="relative w-48 h-64 overflow-hidden rounded-lg shadow-lg">
+                        <Image
+                          src={killerData.legacy_header_urls![0]}
+                          alt={`${killerData.name} artwork`}
+                          fill
+                          className="object-contain"
+                          priority
+                        />
+                      </div>
+                    )}
+                    <div className="mt-2 text-center">
+                      <p className="text-sm text-gray-300">Art by {getArtistFromLegacyUrl(killerData.legacy_header_urls![0])}</p>
+                    </div>
+                  </div>
+
+                  {/* Center Welcome Text */}
+                  <div className="flex-1 max-w-md text-center">
+                    <h1 className="text-3xl font-mono mb-6 underline">P100 {killerData.name.toUpperCase()}</h1>
+                    <div className="space-y-4 font-mono text-lg">
+                      <p>
+                        Welcome on the P100 {killerData.name} page. Here, you will find the list, 
+                        as well as multiple artwork/renders made by wonderful artists. 
+                        Click on the image to go to the artist's page directly. 
+                        You can also see their name below each fanart. Reminder that it isn't ordered! 
+                        You can find links at the bottom of the page to contact me.
+                      </p>
+                    </div>
+                  </div>                  {/* Right Image - Perks */}
+                  <div className="flex-shrink-0">
+                    <div className="relative w-48 h-64 overflow-hidden rounded-lg shadow-lg">
+                      <Image
+                        src={killerData.legacy_header_urls![1]}
+                        alt={`${killerData.name} perks`}
+                        fill
+                        className="object-contain"
+                        priority
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Mobile Layout - Stacked */}
+                <div className="md:hidden space-y-6">
+                  <h1 className="text-3xl font-mono mb-6 underline text-center">Welcome to the P100 {killerData.name.toUpperCase()}</h1>
+                  
+                  <div className="space-y-4 font-mono text-lg text-center">
+                    <p>
+                      Welcome on the P100 {killerData.name} page. Here, you will find the list, 
+                      as well as multiple artwork/renders made by wonderful artists. 
+                      Click on the image to go to the artist's page directly. 
+                      You can also see their name below each fanart. Reminder that it isn't ordered! 
+                      You can find links at the bottom of the page to contact me.
+                    </p>
+                  </div>
+                    <div className="grid grid-cols-2 gap-4">                    {/* Left Image - Artwork */}
+                    <div>                      {getArtistUrlFromLegacyUrl(killerData.legacy_header_urls![0]) ? (
+                        <a 
+                          href={getArtistUrlFromLegacyUrl(killerData.legacy_header_urls![0])!} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="block hover:opacity-90 transition-opacity"
+                        >
+                          <div className="relative aspect-[3/4] overflow-hidden rounded-lg shadow-lg">
+                            <Image
+                              src={killerData.legacy_header_urls![0]}
+                              alt={`${killerData.name} artwork`}
+                              fill
+                              className="object-contain"
+                              priority
+                            />
+                          </div>
+                        </a>
+                      ) : (
+                        <div className="relative aspect-[3/4] overflow-hidden rounded-lg shadow-lg">
+                          <Image
+                            src={killerData.legacy_header_urls![0]}
+                            alt={`${killerData.name} artwork`}
+                            fill
+                            className="object-contain"
+                            priority
+                          />
+                        </div>
+                      )}
+                      <div className="mt-2 text-center">
+                        <p className="text-sm text-gray-300">Art by {getArtistFromLegacyUrl(killerData.legacy_header_urls![0])}</p>
+                      </div>
+                    </div>                    {/* Right Image - Perks */}
+                    <div>
+                      <div className="relative aspect-[3/4] overflow-hidden rounded-lg shadow-lg">
+                        <Image
+                          src={killerData.legacy_header_urls![1]}
+                          alt={`${killerData.name} perks`}
+                          fill
+                          className="object-contain"
+                          priority
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* Always show title */}
+                <h1 className="text-3xl font-mono mb-6 underline text-center">P100 {killerData.name.toUpperCase()}</h1>
+
+                {/* Standard Header Image - Use header_url if available */}
+                {killerData.header_url && (
+                  <div className="mb-8">
+                    <div className="relative h-48 md:h-64 lg:h-80 w-full overflow-hidden rounded-lg">
+                      <Image
+                        src={killerData.header_url}
+                        alt={`${killerData.name} header`}
+                        fill
+                        className="object-cover"
+                        priority
+                      />
+                    </div>
+                  </div>
+                )}
+                
+                {/* Welcome message - only show if no header */}
+                {!killerData.header_url && (
+                  <div className="mb-12 space-y-4 font-mono text-xl text-center">
+                    <p>
+                      Welcome on the P100 {killerData.name} page. Here, you will find the list, 
+                      as well as multiple artwork/renders made by wonderful artists. 
+                      Click on the image to go to the artist's page directly. 
+                      You can also see their name below each fanart. Reminder that it isn't ordered! 
+                      You can find links at the bottom of the page to contact me.
+                    </p>
+                  </div>                )}
+              </>
+            )}            {/* P100 Players List with Side Artist Galleries */}
+            <div className="mb-10 relative">
+              {/* Left Side Artist Gallery - Full Size, No Shrinking */}
+              {killerData.artist_urls && killerData.artist_urls.length > 0 && (
+              <div className="hidden xl:block absolute -left-96 top-0 w-80 space-y-6">
+                {killerData.artist_urls.slice(0, Math.ceil(killerData.artist_urls.length / 2)).map((artworkUrl, index) => {
+                const artistInfo = getArtistInfoFromUrl(artworkUrl);
+                return (
+                  <div key={`left-artwork-${index}`} className="relative">
+                  {artistInfo.artistUrl ? (
+                    <a 
+                    href={artistInfo.artistUrl} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="block hover:opacity-90 transition-opacity"
+                    >
+                    <div className="relative overflow-hidden rounded-lg shadow-lg">
+                      <Image
+                      src={artworkUrl}
+                      alt={`${killerData.name} artwork by ${artistInfo.artistName}`}
+                      width={1800}
+                      height={1800}
+                      className="w-full h-auto object-contain"
+                      />
+                    </div>
+                    <div className="mt-2 text-center">
+                      <p className="text-sm text-gray-300">Art by: {artistInfo.artistName}</p>
+                    </div>
+                    </a>
+                  ) : (
+                    <div className="block">
+                    <div className="relative overflow-hidden rounded-lg shadow-lg">
+                      <Image
+                      src={artworkUrl}
+                      alt={`${killerData.name} artwork by ${artistInfo.artistName}`}
+                      width={1800}
+                      height={1800}
+                      className="w-full h-auto object-contain"
+                      />
+                    </div>
+                    <div className="mt-2 text-center">
+                      <p className="text-sm text-gray-300">Art by: {artistInfo.artistName}</p>
+                    </div>
+                    </div>
+                  )}
+                  </div>
+                );
+               })}
+              </div>
+              )}
+              {/* Right Side Artist Gallery - Full Size, No Shrinking */}
+              {killerData.artist_urls && killerData.artist_urls.length > Math.ceil(killerData.artist_urls.length / 2) && (
+              <div className="hidden xl:block absolute -right-96 top-0 w-80 space-y-6">
+                {killerData.artist_urls.slice(Math.ceil(killerData.artist_urls.length / 2)).map((artworkUrl, index) => {
+                const artistInfo = getArtistInfoFromUrl(artworkUrl);
+                return (
+                  <div key={`right-artwork-${index}`} className="relative">
+                  {artistInfo.artistUrl ? (
+                    <a 
+                    href={artistInfo.artistUrl} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="block hover:opacity-90 transition-opacity"
+                    >
+                    <div className="relative overflow-hidden rounded-lg shadow-lg">
+                      <Image
+                      src={artworkUrl}
+                      alt={`${killerData.name} artwork by ${artistInfo.artistName}`}
+                      width={1800}
+                      height={1800}
+                      className="w-full h-auto object-contain"
+                      />
+                    </div>
+                    <div className="mt-2 text-center">
+                      <p className="text-sm text-gray-300">Art by: {artistInfo.artistName}</p>
+                    </div>
+                    </a>
+                  ) : (
+                    <div className="block">
+                    <div className="relative overflow-hidden rounded-lg shadow-lg">
+                      <Image
+                      src={artworkUrl}
+                      alt={`${killerData.name} artwork by ${artistInfo.artistName}`}
+                      width={1800}
+                      height={1800}
+                      className="w-full h-auto object-contain"
+                      />
+                    </div>
+                    <div className="mt-2 text-center">
+                      <p className="text-sm text-gray-300">Art by: {artistInfo.artistName}</p>
+                    </div>
+                    </div>
+                  )}          </div>
+                );
+               })}
+              </div>
+              )}
+
+              <h2 className="text-xl font-mono mb-6 text-center">The P100 {killerData.name} list starts here:</h2>
+              {killerData.players.length === 0 ? (
+              <div className="bg-black/40 border border-red-600/30 rounded-lg p-8 text-center">
+                <p className="font-mono text-lg text-gray-400">No P100 players found for this killer yet.</p>
+                <p className="font-mono text-sm text-gray-500 mt-2">Be the first to submit your P100!</p>
+              </div>
+              ) : (
+              <div className="bg-black/30 border border-red-600/20 rounded-lg p-6 backdrop-blur-sm">
+                <div className="mb-4 flex items-center justify-center gap-4 text-sm text-gray-400 font-mono">
+                <span>Total P100 Players: {killerData.players.length}</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                {killerData.players.map((player) => (
+                <div 
+                key={player.id} 
+                className="relative bg-black/40 border border-red-600/20 rounded-md p-3 hover:border-red-500/40 hover:bg-black/60 transition-all duration-200"
+                role="listitem"
+                tabIndex={0}
+                >
+                <div className="flex items-center w-full min-h-[36px]">
+                  {player.p200 && (
+                  <div 
+                  className="flex-shrink-0 w-9 h-9 relative mr-2 cursor-help"
+                  title="P200 means a player reached P100 on the same character twice. This is a rare achievement and the players on this list deserve full credit for the time and dedication it takes to reach it."
+                  >
+                  <Image
+                  src="/p200.png"
+                  alt="P200 Achievement"
+                  width={36}
+                  height={36}
+                  className="object-contain"
+                  />
+                  </div>
+                  )}
+                  <span className="font-mono text-sm text-gray-200">
+                  {player.username}
+                  </span>
+                </div>
+                  </div>
+                ))}
+                </div>
+                
+                <div className="mt-4 pt-4 border-t border-red-600/20 text-center">
+                <p className="text-xs text-gray-500 font-mono">
+                  Last updated: {new Date().toLocaleDateString()}
+                </p>
+                </div>
+              </div>
+              )}
+            </div>
+            
+            {/* Remaining Artwork Gallery for smaller screens - Full Size */}
+            {killerData.artist_urls && killerData.artist_urls.length > 0 && (
+              <div className="mb-12 xl:hidden">
+                <h2 className="text-xl font-mono mb-4 text-center">Artwork Gallery</h2>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {killerData.artist_urls.map((artworkUrl, index) => {
+                    const artistInfo = getArtistInfoFromUrl(artworkUrl);
+                    return (
+                      <div key={`mobile-artwork-${index}`} className="relative overflow-hidden rounded-lg">
+                        {artistInfo.artistUrl ? (
+                          <a 
+                            href={artistInfo.artistUrl} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="block"
+                          >
+                            <Image
+                              src={artworkUrl}
+                              alt={`${killerData.name} artwork by ${artistInfo.artistName}`}
+                              width={0}
+                              height={0}
+                              sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+                              className="w-full h-auto transition-transform hover:scale-105"
+                              style={{ width: 'auto', height: 'auto' }}
+                              loading="lazy"
+                            />
+                            <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-2 text-center">
+                              <p className="text-sm">Art by: {artistInfo.artistName}</p>
+                            </div>
+                          </a>
+                        ) : (
+                          <div className="block">
+                            <Image
+                              src={artworkUrl}
+                              alt={`${killerData.name} artwork by ${artistInfo.artistName}`}
+                              width={0}
+                              height={0}
+                              sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+                              className="w-full h-auto transition-transform hover:scale-105"
+                              style={{ width: 'auto', height: 'auto' }}
+                              loading="lazy"
+                            />
+                            <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-2 text-center">
+                              <p className="text-sm">Art by: {artistInfo.artistName}</p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        </main>
+      </BackgroundWrapper>
+    </>
+  );
+}
