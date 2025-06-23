@@ -1,154 +1,201 @@
-import { getArtistInfoFromUrl, getArtists } from './artists-service';
+// lib/artist-analytics.ts
 
-export interface ArtworkAnalytics {
+import { createServerClient, Database } from './supabase-client';
+import { SupabaseClient } from '@supabase/supabase-js';
+
+// --- Type Definitions (Local to this file) ---
+
+/**
+ * Represents an artist from the database.
+ * This structure matches your 'artists' table schema.
+ */
+interface Artist {
+  id: string;
+  name: string;
+  url: string;
+  platform: string;
+  slug: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/**
+ * Represents the detailed analysis of a single piece of artwork.
+ */
+interface ArtworkDetail {
+  artworkUrl: string;
+  artist: Artist | null; // Store the full artist object if found
+  matchFound: boolean;
+}
+
+/**
+ * Represents the final analytics report for a character's artworks.
+ */
+interface ArtworkAnalytics {
   characterId: string;
   characterName: string;
   characterType: 'killer' | 'survivor';
-  totalArtistUrls: number;
-  linkedArtistUrls: number;
-  unlinkedArtistUrls: number;
-  linkingRate: number;
-  artworkDetails: ArtworkDetails[];
-  unlinkedArtistNames: string[];
-  missingArtists: string[];
+  totalArtworks: number;
+  matchedArtistCount: number;
+  unmatchedArtistCount: number;
+  platformDistribution: { [key: string]: number };
+  artworkDetails: ArtworkDetail[];
 }
 
-export interface ArtworkDetails {
-  source: 'artist_urls';
-  index: number;
-  originalUrl?: string;
-  imageUrl: string;
-  filename: string;
-  extractedArtistName: string;
-  mappedArtistUrl: string | null;
-  platform: string | null;
-  isLinked: boolean;
+// --- Local Helper Functions ---
+
+/**
+ * Normalizes a name for case-insensitive and flexible matching.
+ * Removes spaces, hyphens, and underscores, and converts to lowercase.
+ * e.g., "Polina Butterfly", "polina-butterfly", "Polina_Butterfly" all become "polinabutterfly".
+ * @param name - The string to normalize.
+ * @returns The normalized string.
+ */
+const normalizeName = (name: string): string => name.toLowerCase().replace(/[\s_-]/g, '');
+
+/**
+ * Extracts the artist's name or slug from an artwork URL's filename.
+ * It looks for a pattern like "art by [artist_name]".
+ * @param url - The full URL to the artwork image.
+ * @returns The extracted artist identifier string, or null if not found.
+ */
+function extractArtistIdentifierFromUrl(url: string): string | null {
+  try {
+    const decodedUrl = decodeURIComponent(url);
+    const filename = decodedUrl.substring(decodedUrl.lastIndexOf('/') + 1);
+    
+    // Regex to match "art by [name]" case-insensitively and capture the name.
+    const match = filename.match(/art by (.+)\./i);
+    
+    if (match && match[1]) {
+      return match[1].trim(); // Return the captured group (the artist's name/slug)
+    }
+    return null;
+  } catch (e) {
+    console.error("Error parsing artwork URL:", url, e);
+    return null;
+  }
 }
 
+/**
+ * Fetches all artists from the database.
+ * @param supabase - The Supabase client instance.
+ * @returns A promise that resolves to an array of Artist objects.
+ */
+async function getAllArtists(supabase: SupabaseClient<Database>): Promise<Artist[]> {
+  const { data, error } = await supabase.from('artists').select('*');
+  if (error) {
+    console.error("Error fetching all artists:", error.message);
+    return [];
+  }
+  return data || [];
+}
+
+// --- Main Exported Functions ---
+
+/**
+ * Analyzes the artwork URLs for a character to provide statistics.
+ *
+ * @param characterId - The ID of the character.
+ * @param characterName - The name of the character.
+ * @param characterType - The type of character ('killer' or 'survivor').
+ * @param artworkUrls - An array of artwork URLs from the `artist_urls` column.
+ * @param legacyHeaderUrls - An array of URLs from the `legacy_header_urls` column.
+ * @returns A promise that resolves to an ArtworkAnalytics object.
+ */
 export async function analyzeCharacterArtworks(
   characterId: string,
   characterName: string,
   characterType: 'killer' | 'survivor',
-  artistUrls: string[] = []
+  artworkUrls: string[],
+  legacyHeaderUrls?: (string | null)[] | null // Optional parameter for legacy URLs
 ): Promise<ArtworkAnalytics> {
+  const supabase = createServerClient();
   
-  const artworkDetails: ArtworkDetails[] = [];
-  
-  // Process artist_urls from database
-  for (let index = 0; index < artistUrls.length; index++) {
-    const url = artistUrls[index];
-    const artistInfo = await getArtistInfoFromUrl(url, false);
-    const filename = url.split('/').pop()?.split('?')[0] || 'unknown';
-    
-    artworkDetails.push({
-      source: 'artist_urls',
-      index: index + 1,
-      originalUrl: url,
-      imageUrl: url,
-      filename,
-      extractedArtistName: artistInfo.artistName,
-      mappedArtistUrl: artistInfo.artistUrl,
-      platform: artistInfo.platform,
-      isLinked: !!artistInfo.artistUrl
-    });
+  // 1. Fetch all artists and create an efficient lookup map.
+  const allArtistsData = await getAllArtists(supabase);
+  const artistMap = new Map<string, Artist>();
+  for (const artist of allArtistsData) {
+    // Use normalized names and slugs as keys for robust matching
+    artistMap.set(normalizeName(artist.name), artist);
+    if (artist.slug) {
+      artistMap.set(normalizeName(artist.slug), artist);
+    }
   }
-  
-  const totalArtistUrls = artworkDetails.length;
-  const linkedArtistUrls = artworkDetails.filter(detail => detail.isLinked).length;
-  const unlinkedArtistUrls = totalArtistUrls - linkedArtistUrls;
-  const linkingRate = totalArtistUrls > 0 ? Math.round(linkedArtistUrls / totalArtistUrls * 100) : 0;
-  
-  // Get list of unlinked artist names
-  const unlinkedArtistNames = artworkDetails
-    .filter(detail => !detail.isLinked)
-    .map(detail => detail.extractedArtistName);
-    
-  // Find which artists are completely missing from our database
-  const allArtists = await getArtists();
-  const knownArtistNames = allArtists.map(artist => artist.name.toLowerCase());
-  const uniqueUnlinkedNames = Array.from(new Set(unlinkedArtistNames));
-  const missingArtists = uniqueUnlinkedNames
-    .filter(name => !knownArtistNames.includes(name.toLowerCase()));
-    
+
+  const artworkDetails: ArtworkDetail[] = [];
+  let matchedArtistCount = 0;
+  let unmatchedArtistCount = 0;
+  const platformCounts: { [key: string]: number } = {};
+
+  // 2. Combine all artwork URLs and filter out non-artwork (like perks images).
+  const allArtworkUrls = [
+    ...(artworkUrls || []),
+    ...(legacyHeaderUrls || []),
+  ].filter((url): url is string => !!url && !url.toUpperCase().includes('PERKS.PNG'));
+
+  // 3. Process each artwork URL.
+  for (const url of allArtworkUrls) {
+    const identifier = extractArtistIdentifierFromUrl(url);
+    let foundArtist: Artist | null = null;
+
+    if (identifier) {
+      const normalizedIdentifier = normalizeName(identifier);
+      foundArtist = artistMap.get(normalizedIdentifier) || null;
+    }
+
+    if (foundArtist) {
+      artworkDetails.push({ artworkUrl: url, artist: foundArtist, matchFound: true });
+      matchedArtistCount++;
+      platformCounts[foundArtist.platform] = (platformCounts[foundArtist.platform] || 0) + 1;
+    } else {
+      artworkDetails.push({ artworkUrl: url, artist: null, matchFound: false });
+      unmatchedArtistCount++;
+    }
+  }
+
   return {
     characterId,
     characterName,
     characterType,
-    totalArtistUrls,
-    linkedArtistUrls,
-    unlinkedArtistUrls,
-    linkingRate,
+    totalArtworks: allArtworkUrls.length,
+    matchedArtistCount,
+    unmatchedArtistCount,
+    platformDistribution: platformCounts,
     artworkDetails,
-    unlinkedArtistNames,
-    missingArtists
   };
 }
 
-export function logDetailedArtworkAnalysis(analytics: ArtworkAnalytics): void {
-  console.log(`\n🎨 DETAILED ARTWORK ANALYSIS FOR ${analytics.characterName.toUpperCase()}`);
-  console.log('='.repeat(80));
-    // Process artist_urls from database
-  const artistUrlsDetails = analytics.artworkDetails.filter(detail => detail.source === 'artist_urls');
-  if (artistUrlsDetails.length > 0) {
-    console.log(`\n📁 ARTIST_URLS FROM DATABASE (${artistUrlsDetails.length} items):`);
-    artistUrlsDetails.forEach((detail) => {
-      console.log(`\n  🖼️ Processing artwork ${detail.index}/${artistUrlsDetails.length}:`);
-      console.log(`    🔍 Extracting artist from URL: ${detail.originalUrl}`);
-      console.log(`    📁 Extracted filename: ${detail.filename}`);
-      console.log(`    📝 Extracted artist name: "${detail.extractedArtistName}"`);
-      console.log(`    🔍 Database lookup result: ${detail.isLinked ? `FOUND (${detail.extractedArtistName} -> ${detail.mappedArtistUrl})` : 'NOT FOUND'}`);
-      console.log(`  ${detail.index}. ${detail.isLinked ? '✅' : '❌'} "${detail.extractedArtistName}"`);
-      console.log(`     📝 Original URL: ${detail.originalUrl}`);
-      console.log(`     📄 Filename: ${detail.filename}`);
-      console.log(`     🔗 Mapped URL: ${detail.mappedArtistUrl || 'NOT FOUND'}`);
-      console.log(`     🌐 Platform: ${detail.platform || 'N/A'}`);
-    });
-  } else {
-    console.log('\n📁 ARTIST_URLS FROM DATABASE: None found');
+/**
+ * Logs a detailed analysis of the artwork analytics to the console.
+ * This is useful for server-side debugging and monitoring.
+ * @param analytics - The ArtworkAnalytics object to log.
+ */
+export function logDetailedArtworkAnalysis(analytics: ArtworkAnalytics) {
+  console.log('--- Artwork Analysis Report ---');
+  console.log(`Character: ${analytics.characterName} (${analytics.characterType})`);
+  console.log(`Character ID: ${analytics.characterId}`);
+  console.log(`Total Artworks Found: ${analytics.totalArtworks}`);
+  console.log(`  - Matched Artists in DB: ${analytics.matchedArtistCount}`);
+  console.log(`  - Unmatched/Unknown Artists: ${analytics.unmatchedArtistCount}`);
+
+  if (analytics.totalArtworks > 0) {
+    const matchPercentage = ((analytics.matchedArtistCount / analytics.totalArtworks) * 100).toFixed(2);
+    console.log(`Artist Match Rate: ${matchPercentage}%`);
   }
 
-  // Summary statistics
-  console.log('\n📊 SUMMARY STATISTICS:');  console.log(`  📈 Total Artist URLs: ${analytics.totalArtistUrls}`);
-  console.log(`  🔗 Linked Artists: ${analytics.linkedArtistUrls}`);
-  console.log(`  ❌ Unlinked Artists: ${analytics.unlinkedArtistUrls}`);
-  console.log(`  📊 Linking Rate: ${analytics.linkingRate}%`);  console.log(`  📁 From artist_urls: ${artistUrlsDetails.length}`);
-  
-  // Log unlinked artists for debugging
-  if (analytics.unlinkedArtistUrls > 0) {
-    console.log('\n⚠️ UNLINKED ARTISTS (need to be added to the artists database):');
-    analytics.unlinkedArtistNames.forEach((name, index) => {
-      console.log(`  ${index + 1}. "${name}"`);
-    });
+  if (Object.keys(analytics.platformDistribution).length > 0) {
+    console.log('Platform Distribution of Matched Artists:');
+    for (const [platform, count] of Object.entries(analytics.platformDistribution)) {
+      console.log(`  - ${platform}: ${count}`);
+    }
   }
   
-  // Log missing artists specifically
-  if (analytics.missingArtists.length > 0) {
-    console.log('\n🚨 COMPLETELY MISSING ARTISTS (priority for adding to the artists database):');
-    analytics.missingArtists.forEach((name, index) => {
-      console.log(`  ${index + 1}. "${name}"`);
-    });
+  const unmatched = analytics.artworkDetails.filter(d => !d.matchFound);
+  if (unmatched.length > 0) {
+      console.log('Unmatched Artwork URLs:');
+      unmatched.forEach(detail => console.log(`  - ${detail.artworkUrl}`));
   }
-  
-  console.log('\n' + '='.repeat(80));
-  console.log(`END ANALYSIS FOR ${analytics.characterName.toUpperCase()}\n`);
-}
 
-export async function generateArtistStatistics(): Promise<void> {
-  console.log('\n📊 GLOBAL ARTIST DATABASE STATISTICS');
-  console.log('='.repeat(50));
-  
-  const allArtists = await getArtists();
-  console.log(`Total artists in database: ${allArtists.length}`);
-  
-  const platformCounts = allArtists.reduce((acc: Record<string, number>, artist) => {
-    acc[artist.platform] = (acc[artist.platform] || 0) + 1;
-    return acc;
-  }, {});
-  
-  console.log('\nBy platform:');
-  Object.entries(platformCounts).forEach(([platform, count]) => {
-    console.log(`  ${platform}: ${count}`);
-  });
-  
-  console.log('\n' + '='.repeat(50));
+  console.log('--- End of Report ---');
 }

@@ -7,10 +7,30 @@ import LensFlare from '@/components/LensFlare';
 import CharacterNavigation from '@/components/CharacterNavigation';
 import { createServerClient } from '@/lib/supabase-client';
 import { getCharacterNavigation } from '@/lib/character-navigation';
-import { getArtistInfoFromUrl, preloadArtistInfo } from '@/lib/artists-compat';
+// REMOVED: import { getArtistInfoFromUrl, preloadArtistInfo } from '@/lib/artists-compat';
+import { analyzeCharacterArtworks, logDetailedArtworkAnalysis } from '@/lib/artist-analytics';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0; 
+
+// This helper is no longer needed with the new analytics function, but kept as requested
+function getArtistFromLegacyUrl(url: string): string {
+    return 'Artist'; // Placeholder
+}
+
+// This helper is no longer needed, but kept as requested
+function getArtistUrlFromLegacyUrl(url: string): string | null {
+    return null; // Placeholder
+}
+
+// Helper function to check if legacy header should be displayed
+function shouldDisplayLegacyHeader(legacy_header_urls: (string | null)[] | null | undefined): boolean {
+  return legacy_header_urls !== null && 
+         legacy_header_urls !== undefined && 
+         legacy_header_urls.length >= 2 &&
+         !!legacy_header_urls[0] && 
+         !!legacy_header_urls[1];
+}
 
 // Define types for our data
 interface P100Player {
@@ -25,32 +45,10 @@ interface SurvivorData {
   name: string;
   image_url: string;
   header_url?: string | null;
-  artist_urls?: string[] | null;
-  legacy_header_urls?: string[] | null;
+  artist_urls?: (string | null)[] | null;
+  legacy_header_urls?: (string | null)[] | null;
   players: P100Player[];
   background_image_url?: string;
-}
-
-// Helper function to extract artist name from legacy header URL
-function getArtistFromLegacyUrl(url: string): string {
-  // Extract artist info using the existing utility function
-  const artistInfo = getArtistInfoFromUrl(url);
-  return artistInfo.artistName || 'Artist';
-}
-
-// Helper function to get artist URL from legacy header URL
-function getArtistUrlFromLegacyUrl(url: string): string | null {
-  const artistInfo = getArtistInfoFromUrl(url);
-  return artistInfo.artistUrl || null;
-}
-
-// Helper function to check if legacy header should be displayed
-function shouldDisplayLegacyHeader(legacy_header_urls: string[] | null | undefined): boolean {
-  return legacy_header_urls !== null && 
-         legacy_header_urls !== undefined && 
-         legacy_header_urls.length >= 2 &&
-         !!legacy_header_urls[0] && 
-         !!legacy_header_urls[1];
 }
 
 // Generate static params for all survivors
@@ -163,20 +161,21 @@ export default async function SurvivorPage({ params }: { params: { slug: string 
   // Get navigation data
   const navigation = await getCharacterNavigation(params.slug, 'survivor');
   
-  // Preload artist data for better performance
-  const urlsToPreload: string[] = [];
-  
-  if (survivorData.legacy_header_urls) {
-    urlsToPreload.push(...survivorData.legacy_header_urls);
-  }
-  
-  if (survivorData.artist_urls) {
-    urlsToPreload.push(...survivorData.artist_urls);
-  }
-  
-  if (urlsToPreload.length > 0) {
-    await preloadArtistInfo(urlsToPreload);
-  }
+  // **NEW: Analyze artworks using the new efficient function**
+  const analytics = await analyzeCharacterArtworks(
+    survivorData.id,
+    survivorData.name,
+    'survivor',
+    (survivorData.artist_urls as string[]) || [],
+    survivorData.legacy_header_urls
+  );
+
+  // **NEW: Log the results on the server for debugging**
+  logDetailedArtworkAnalysis(analytics);
+
+  // **NEW: Create a lookup map to easily find artist info for a given URL**
+  const artworkAnalyticsMap = new Map(analytics.artworkDetails.map(detail => [detail.artworkUrl, detail]));
+  const galleryArtworkDetails = analytics.artworkDetails.filter(detail => survivorData.artist_urls?.includes(detail.artworkUrl));
   
   return (
     <>
@@ -200,37 +199,19 @@ export default async function SurvivorPage({ params }: { params: { slug: string 
                 <div className="hidden md:flex items-center justify-center gap-8 mb-8">
                   {/* Left Image - Artwork */}
                   <div className="flex-shrink-0">
-                    {getArtistUrlFromLegacyUrl(survivorData.legacy_header_urls![0]) ? (
-                      <a 
-                        href={getArtistUrlFromLegacyUrl(survivorData.legacy_header_urls![0])!} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="block hover:opacity-90 transition-opacity"
-                      >
-                        <div className="relative w-48 h-64 overflow-hidden rounded-lg shadow-lg">
-                          <Image
-                            src={survivorData.legacy_header_urls![0]}
-                            alt={`${survivorData.name} artwork`}
-                            fill
-                            className="object-contain"
-                            priority
-                          />
-                        </div>
-                      </a>
-                    ) : (
-                      <div className="relative w-48 h-64 overflow-hidden rounded-lg shadow-lg">
-                        <Image
-                          src={survivorData.legacy_header_urls![0]}
-                          alt={`${survivorData.name} artwork`}
-                          fill
-                          className="object-contain"
-                          priority
-                        />
-                      </div>
-                    )}
-                    <div className="mt-2 text-center">
-                      <p className="text-sm text-gray-300">Art by {getArtistFromLegacyUrl(survivorData.legacy_header_urls![0])}</p>
-                    </div>
+                    {(() => {
+                        const detail = artworkAnalyticsMap.get(survivorData.legacy_header_urls![0]!);
+                        return (
+                          <a href={detail?.artist?.url || '#'} target="_blank" rel="noopener noreferrer" className="block hover:opacity-90 transition-opacity">
+                            <div className="relative w-48 h-64 overflow-hidden rounded-lg shadow-lg">
+                              <Image src={survivorData.legacy_header_urls![0]!} alt={`${survivorData.name} artwork`} fill className="object-contain" priority/>
+                            </div>
+                            <div className="mt-2 text-center">
+                               <p className="text-sm text-gray-300">Art by {detail?.artist?.name || 'Unknown'}</p>
+                            </div>
+                          </a>
+                        );
+                    })()}
                   </div>
 
                   {/* Center Welcome Text */}
@@ -256,37 +237,19 @@ export default async function SurvivorPage({ params }: { params: { slug: string 
 
                   {/* Right Image - Perks */}
                   <div className="flex-shrink-0">
-                    {getArtistUrlFromLegacyUrl(survivorData.legacy_header_urls![1]) ? (
-                      <a 
-                        href={getArtistUrlFromLegacyUrl(survivorData.legacy_header_urls![1])!} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="block hover:opacity-90 transition-opacity"
-                      >
-                        <div className="relative w-48 h-64 overflow-hidden rounded-lg shadow-lg">
-                          <Image
-                            src={survivorData.legacy_header_urls![1]}
-                            alt={`${survivorData.name} perks`}
-                            fill
-                            className="object-contain"
-                            priority
-                          />
-                        </div>
-                      </a>
-                    ) : (
-                      <div className="relative w-48 h-64 overflow-hidden rounded-lg shadow-lg">
-                        <Image
-                          src={survivorData.legacy_header_urls![1]}
-                          alt={`${survivorData.name} perks`}
-                          fill
-                          className="object-contain"
-                          priority
-                        />
-                      </div>
-                    )}
-                    <div className="mt-2 text-center">
-                      <p className="text-sm text-gray-300">Art by {getArtistFromLegacyUrl(survivorData.legacy_header_urls![1])}</p>
-                    </div>
+                    {(() => {
+                        const detail = artworkAnalyticsMap.get(survivorData.legacy_header_urls![1]!);
+                        return (
+                          <a href={detail?.artist?.url || '#'} target="_blank" rel="noopener noreferrer" className="block hover:opacity-90 transition-opacity">
+                            <div className="relative w-48 h-64 overflow-hidden rounded-lg shadow-lg">
+                              <Image src={survivorData.legacy_header_urls![1]!} alt={`${survivorData.name} perks`} fill className="object-contain" priority/>
+                            </div>
+                            <div className="mt-2 text-center">
+                               <p className="text-sm text-gray-300">Art by {detail?.artist?.name || 'Unknown'}</p>
+                            </div>
+                          </a>
+                        );
+                    })()}
                   </div>
                 </div>
 
@@ -296,74 +259,38 @@ export default async function SurvivorPage({ params }: { params: { slug: string 
                   
                   <div className="grid grid-cols-2 gap-4">
                     {/* Left Image - Artwork */}
-                    <div>
-                      {getArtistUrlFromLegacyUrl(survivorData.legacy_header_urls![0]) ? (
-                        <a 
-                          href={getArtistUrlFromLegacyUrl(survivorData.legacy_header_urls![0])!} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="block hover:opacity-90 transition-opacity"
-                        >
-                          <div className="relative aspect-[3/4] overflow-hidden rounded-lg shadow-lg">
-                            <Image
-                              src={survivorData.legacy_header_urls![0]}
-                              alt={`${survivorData.name} artwork`}
-                              fill
-                              className="object-contain"
-                              priority
-                            />
-                          </div>
-                        </a>
-                      ) : (
-                        <div className="relative aspect-[3/4] overflow-hidden rounded-lg shadow-lg">
-                          <Image
-                            src={survivorData.legacy_header_urls![0]}
-                            alt={`${survivorData.name} artwork`}
-                            fill
-                            className="object-contain"
-                            priority
-                          />
-                        </div>
-                      )}
-                      <div className="mt-2 text-center">
-                        <p className="text-xs text-gray-300">Art by {getArtistFromLegacyUrl(survivorData.legacy_header_urls![0])}</p>
-                      </div>
-                    </div>
+                    {(() => {
+                        const detail = artworkAnalyticsMap.get(survivorData.legacy_header_urls![0]!);
+                        return (
+                            <div>
+                                <a href={detail?.artist?.url || '#'} target="_blank" rel="noopener noreferrer" className="block hover:opacity-90 transition-opacity">
+                                    <div className="relative aspect-[3/4] overflow-hidden rounded-lg shadow-lg">
+                                        <Image src={survivorData.legacy_header_urls![0]!} alt={`${survivorData.name} artwork`} fill className="object-contain" priority/>
+                                    </div>
+                                </a>
+                                <div className="mt-2 text-center">
+                                    <p className="text-xs text-gray-300">Art by {detail?.artist?.name || 'Unknown'}</p>
+                                </div>
+                            </div>
+                        );
+                    })()}
 
                     {/* Right Image - Perks */}
-                    <div>
-                      {getArtistUrlFromLegacyUrl(survivorData.legacy_header_urls![1]) ? (
-                        <a 
-                          href={getArtistUrlFromLegacyUrl(survivorData.legacy_header_urls![1])!} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="block hover:opacity-90 transition-opacity"
-                        >
-                          <div className="relative aspect-[3/4] overflow-hidden rounded-lg shadow-lg">
-                            <Image
-                              src={survivorData.legacy_header_urls![1]}
-                              alt={`${survivorData.name} perks`}
-                              fill
-                              className="object-contain"
-                              priority
-                            />
-                          </div>
-                        </a>
-                      ) : (
-                        <div className="relative aspect-[3/4] overflow-hidden rounded-lg shadow-lg">
-                          <Image
-                            src={survivorData.legacy_header_urls![1]}
-                            alt={`${survivorData.name} perks`}
-                            fill
-                            className="object-contain"
-                            priority
-                          />
-                        </div>
-                      )}
-                      <div className="mt-2 text-center">
-                        <p className="text-xs text-gray-300">Art by {getArtistFromLegacyUrl(survivorData.legacy_header_urls![1])}</p>
-                      </div>
-                    </div>
+                    {(() => {
+                        const detail = artworkAnalyticsMap.get(survivorData.legacy_header_urls![1]!);
+                        return (
+                            <div>
+                                <a href={detail?.artist?.url || '#'} target="_blank" rel="noopener noreferrer" className="block hover:opacity-90 transition-opacity">
+                                    <div className="relative aspect-[3/4] overflow-hidden rounded-lg shadow-lg">
+                                        <Image src={survivorData.legacy_header_urls![1]!} alt={`${survivorData.name} perks`} fill className="object-contain" priority/>
+                                    </div>
+                                </a>
+                                <div className="mt-2 text-center">
+                                    <p className="text-xs text-gray-300">Art by {detail?.artist?.name || 'Unknown'}</p>
+                                </div>
+                            </div>
+                        );
+                    })()}
                   </div>
                   
                   <div className="space-y-4 font-mono text-sm text-center">
@@ -425,103 +352,33 @@ export default async function SurvivorPage({ params }: { params: { slug: string 
               </>
             )}{/* P100 Players List with Side Artist Galleries */}
             <div className="mb-12 relative">
-              {/* Left Side Artist Gallery - From artist_urls */}
-              {survivorData.artist_urls && survivorData.artist_urls.length > 0 && (
-                <div className="hidden xl:block absolute -left-96 top-0 w-80 space-y-6">
-                  {survivorData.artist_urls.slice(0, Math.ceil(survivorData.artist_urls.length / 2)).map((artworkUrl, index) => {
-                    const artistInfo = getArtistInfoFromUrl(artworkUrl);
-                    return (
-                      <div key={`left-artist-url-${index}`} className="relative">
-                        {artistInfo.artistUrl ? (
-                          <a 
-                            href={artistInfo.artistUrl} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="block hover:opacity-90 transition-opacity"
-                          >
-                            <div className="relative overflow-hidden rounded-lg shadow-lg">
-                              <Image
-                                src={artworkUrl}
-                                alt={`${survivorData.name} artwork by ${artistInfo.artistName}`}
-                                width={1800}
-                                height={1800}
-                                className="w-full h-auto object-contain"
-                              />
-                            </div>
-                            <div className="mt-2 text-center">
-                              <p className="text-sm text-gray-300">Art by: {artistInfo.artistName}</p>
-                            </div>
-                          </a>
-                        ) : (
-                          <div className="block">
-                            <div className="relative overflow-hidden rounded-lg shadow-lg">
-                              <Image
-                                src={artworkUrl}
-                                alt={`${survivorData.name} artwork by ${artistInfo.artistName}`}
-                                width={1800}
-                                height={1800}
-                                className="w-full h-auto object-contain"
-                              />
-                            </div>
-                            <div className="mt-2 text-center">
-                              <p className="text-sm text-gray-300">Art by: {artistInfo.artistName}</p>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              {/* Left Side Artist Gallery */}
+              <div className="hidden xl:block absolute -left-96 top-0 w-80 space-y-6">
+                {galleryArtworkDetails.slice(0, Math.ceil(galleryArtworkDetails.length / 2)).map((detail, index) => (
+                    <a key={`left-artist-url-${index}`} href={detail.artist?.url || '#'} target="_blank" rel="noopener noreferrer" className="block hover:opacity-90 transition-opacity">
+                        <div className="relative overflow-hidden rounded-lg shadow-lg">
+                            <Image src={detail.artworkUrl} alt={`${survivorData.name} artwork by ${detail.artist?.name || 'Unknown'}`} width={1800} height={1800} className="w-full h-auto object-contain"/>
+                        </div>
+                        <div className="mt-2 text-center">
+                            <p className="text-sm text-gray-300">Art by: {detail.artist?.name || 'Unknown'}</p>
+                        </div>
+                    </a>
+                ))}
+              </div>
 
-              {/* Right Side Artist Gallery - From artist_urls */}
-              {survivorData.artist_urls && survivorData.artist_urls.length > Math.ceil(survivorData.artist_urls.length / 2) && (
-                <div className="hidden xl:block absolute -right-96 top-0 w-80 space-y-6">
-                  {survivorData.artist_urls.slice(Math.ceil(survivorData.artist_urls.length / 2)).map((artworkUrl, index) => {
-                    const artistInfo = getArtistInfoFromUrl(artworkUrl);
-                    return (
-                      <div key={`right-artist-url-${index}`} className="relative">
-                        {artistInfo.artistUrl ? (
-                          <a 
-                            href={artistInfo.artistUrl} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="block hover:opacity-90 transition-opacity"
-                          >
-                            <div className="relative overflow-hidden rounded-lg shadow-lg">
-                              <Image
-                                src={artworkUrl}
-                                alt={`${survivorData.name} artwork by ${artistInfo.artistName}`}
-                                width={1800}
-                                height={1800}
-                                className="w-full h-auto object-contain"
-                              />
-                            </div>
-                            <div className="mt-2 text-center">
-                              <p className="text-sm text-gray-300">Art by: {artistInfo.artistName}</p>
-                            </div>
-                          </a>
-                        ) : (
-                          <div className="block">
-                            <div className="relative overflow-hidden rounded-lg shadow-lg">
-                              <Image
-                                src={artworkUrl}
-                                alt={`${survivorData.name} artwork by ${artistInfo.artistName}`}
-                                width={1800}
-                                height={1800}
-                                className="w-full h-auto object-contain"
-                              />
-                            </div>
-                            <div className="mt-2 text-center">
-                              <p className="text-sm text-gray-300">Art by: {artistInfo.artistName}</p>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              {/* Right Side Artist Gallery */}
+              <div className="hidden xl:block absolute -right-96 top-0 w-80 space-y-6">
+                {galleryArtworkDetails.slice(Math.ceil(galleryArtworkDetails.length / 2)).map((detail, index) => (
+                    <a key={`right-artist-url-${index}`} href={detail.artist?.url || '#'} target="_blank" rel="noopener noreferrer" className="block hover:opacity-90 transition-opacity">
+                        <div className="relative overflow-hidden rounded-lg shadow-lg">
+                            <Image src={detail.artworkUrl} alt={`${survivorData.name} artwork by ${detail.artist?.name || 'Unknown'}`} width={1800} height={1800} className="w-full h-auto object-contain"/>
+                        </div>
+                        <div className="mt-2 text-center">
+                            <p className="text-sm text-gray-300">Art by: {detail.artist?.name || 'Unknown'}</p>
+                        </div>
+                    </a>
+                ))}
+              </div>
 
               <h2 className="text-xl font-mono mb-6 text-center">The P100 {survivorData.name} list starts here:</h2>
               {survivorData.players.length === 0 ? (
@@ -573,57 +430,27 @@ export default async function SurvivorPage({ params }: { params: { slug: string 
               )}
             </div>
             
-            {/* Remaining Artwork Gallery for smaller screens */}
-            {survivorData.artist_urls && survivorData.artist_urls.length > 0 && (
+            {/* Mobile Artwork Gallery */}
+            {galleryArtworkDetails.length > 0 && (
               <div className="mb-12 xl:hidden">
                 <h2 className="text-xl font-mono mb-4 text-center">Artwork Gallery</h2>
-                
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {survivorData.artist_urls.map((artworkUrl, index) => {
-                    const artistInfo = getArtistInfoFromUrl(artworkUrl);
-                    return (
-                      <div key={`mobile-artwork-${index}`} className="relative overflow-hidden rounded-lg">
-                        {artistInfo.artistUrl ? (
-                          <a 
-                            href={artistInfo.artistUrl} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="block"
-                          >
-                            <Image
-                              src={artworkUrl}
-                              alt={`${survivorData.name} artwork by ${artistInfo.artistName}`}
-                              width={0}
-                              height={0}
-                              sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-                              className="w-full h-auto transition-transform hover:scale-105"
-                              style={{ width: 'auto', height: 'auto' }}
-                              loading="lazy"
-                            />
-                            <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-2 text-center">
-                              <p className="text-sm">Art by: {artistInfo.artistName}</p>
-                            </div>
-                          </a>
-                        ) : (
-                          <div className="block">
-                            <Image
-                              src={artworkUrl}
-                              alt={`${survivorData.name} artwork by ${artistInfo.artistName}`}
-                              width={0}
-                              height={0}
-                              sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-                              className="w-full h-auto transition-transform hover:scale-105"
-                              style={{ width: 'auto', height: 'auto' }}
-                              loading="lazy"
-                            />
-                            <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-2 text-center">
-                              <p className="text-sm">Art by: {artistInfo.artistName}</p>
-                            </div>
-                          </div>
-                        )}
+                  {galleryArtworkDetails.map((detail, index) => (
+                    <a key={`mobile-artwork-${index}`} href={detail.artist?.url || '#'} target="_blank" rel="noopener noreferrer" className="block">
+                      <div className="relative overflow-hidden rounded-lg">
+                        <Image
+                          src={detail.artworkUrl}
+                          alt={`${survivorData.name} artwork by ${detail.artist?.name || 'Unknown'}`}
+                          width={0} height={0} sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+                          className="w-full h-auto transition-transform hover:scale-105"
+                          style={{ width: 'auto', height: 'auto' }} loading="lazy"
+                        />
+                        <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-2 text-center">
+                          <p className="text-sm">Art by: {detail.artist?.name || 'Unknown'}</p>
+                        </div>
                       </div>
-                    );
-                  })}
+                    </a>
+                  ))}
                 </div>
               </div>
             )}

@@ -37,3 +37,6 @@ next-env.d.ts
 
 # scripts
 /scripts/*
+
+# ignore all .md files 
+*.md

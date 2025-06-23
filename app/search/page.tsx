@@ -9,9 +9,6 @@ import BackgroundWrapper from '@/components/BackgroundWrapper';
 import { Search, User, Crown, Shield } from 'lucide-react';
 import { createClient } from '@/lib/supabase-client';
 
-export const dynamic = 'force-dynamic';
-export const revalidate = 0; // Revalidate on every request
-
 interface PlayerSearchResult {
   username: string;
   p100Count: number;

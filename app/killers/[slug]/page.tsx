@@ -6,27 +6,21 @@ import BackgroundWrapper from '@/components/BackgroundWrapper';
 import CharacterNavigation from '@/components/CharacterNavigation';
 import { createServerClient } from '@/lib/supabase-client';
 import { getCharacterNavigation } from '@/lib/character-navigation';
-import { getArtistInfoFromUrl, preloadArtistInfo } from '@/lib/artists-compat';
+// REMOVED: import { getArtistInfoFromUrl, preloadArtistInfo } from '@/lib/artists-compat';
 import { analyzeCharacterArtworks, logDetailedArtworkAnalysis } from '@/lib/artist-analytics';
 
-export const dynamic = 'force-dynamic';
-export const revalidate = 0; 
-
-// Helper function to extract artist name from legacy header URL
+// This helper is no longer needed with the new analytics function, but kept as requested
 function getArtistFromLegacyUrl(url: string): string {
-  // Extract artist info using the existing utility function
-  const artistInfo = getArtistInfoFromUrl(url);
-  return artistInfo.artistName || 'Artist';
+  return 'Artist'; // Placeholder, as this logic is now in analyzeCharacterArtworks
 }
 
-// Helper function to get artist URL from legacy header URL
+// This helper is no longer needed, but kept as requested
 function getArtistUrlFromLegacyUrl(url: string): string | null {
-  const artistInfo = getArtistInfoFromUrl(url);
-  return artistInfo.artistUrl || null;
+  return null; // Placeholder
 }
 
 // Helper function to check if legacy header should be displayed
-function shouldDisplayLegacyHeader(legacy_header_urls: string[] | null | undefined): boolean {
+function shouldDisplayLegacyHeader(legacy_header_urls: (string | null)[] | null | undefined): boolean {
   return legacy_header_urls !== null && 
          legacy_header_urls !== undefined && 
          legacy_header_urls.length >= 2 &&
@@ -47,8 +41,8 @@ interface KillerData {
   name: string;
   image_url: string;
   header_url?: string | null;
-  artist_urls?: string[] | null;
-  legacy_header_urls?: string[] | null;
+  artist_urls?: (string | null)[] | null;
+  legacy_header_urls?: (string | null)[] | null;
   players: P100Player[];
   background_image_url?: string;
 }
@@ -150,31 +144,22 @@ export default async function KillerPage({ params }: { params: { slug: string } 
   
   // Get navigation data
   const navigation = await getCharacterNavigation(params.slug, 'killer');
-  
-  // Preload artist data for better performance
-  const urlsToPreload: string[] = [];
-  
-  if (killerData.legacy_header_urls) {
-    urlsToPreload.push(...killerData.legacy_header_urls);
-  }
-  
-  if (killerData.artist_urls) {
-    urlsToPreload.push(...killerData.artist_urls);
-  }
-  
-  if (urlsToPreload.length > 0) {
-    await preloadArtistInfo(urlsToPreload);
-  }
-  
-  // Analyze artworks and log detailed information
+
+  // **NEW: Analyze artworks using the new efficient function**
   const analytics = await analyzeCharacterArtworks(
     killerData.id,
     killerData.name,
     'killer',
-    killerData.artist_urls || []
+    (killerData.artist_urls as string[]) || [],
+    killerData.legacy_header_urls
   );
   
+  // **NEW: Log the results on the server for debugging**
   logDetailedArtworkAnalysis(analytics);
+
+  // **NEW: Create a lookup map to easily find artist info for a given URL**
+  const artworkAnalyticsMap = new Map(analytics.artworkDetails.map(detail => [detail.artworkUrl, detail]));
+  const galleryArtworkDetails = analytics.artworkDetails.filter(detail => killerData.artist_urls?.includes(detail.artworkUrl));
 
   return (
     <>
@@ -193,37 +178,20 @@ export default async function KillerPage({ params }: { params: { slug: string } 
               <div className="mb-12">                {/* Desktop Layout */}
                 <div className="hidden md:flex items-center justify-center gap-8 mb-8">
                   {/* Left Image - Artwork */}
-                  <div className="flex-shrink-0">                    {getArtistUrlFromLegacyUrl(killerData.legacy_header_urls![0]) ? (
-                      <a 
-                        href={getArtistUrlFromLegacyUrl(killerData.legacy_header_urls![0])!} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="block hover:opacity-90 transition-opacity"
-                      >
-                        <div className="relative w-48 h-64 overflow-hidden rounded-lg shadow-lg">
-                          <Image
-                            src={killerData.legacy_header_urls![0]}
-                            alt={`${killerData.name} artwork`}
-                            fill
-                            className="object-contain"
-                            priority
-                          />
-                        </div>
-                      </a>
-                    ) : (
-                      <div className="relative w-48 h-64 overflow-hidden rounded-lg shadow-lg">
-                        <Image
-                          src={killerData.legacy_header_urls![0]}
-                          alt={`${killerData.name} artwork`}
-                          fill
-                          className="object-contain"
-                          priority
-                        />
-                      </div>
-                    )}
-                    <div className="mt-2 text-center">
-                      <p className="text-sm text-gray-300">Art by {getArtistFromLegacyUrl(killerData.legacy_header_urls![0])}</p>
-                    </div>
+                  <div className="flex-shrink-0">                    
+                    {(() => {
+                        const detail = artworkAnalyticsMap.get(killerData.legacy_header_urls![0]!);
+                        return (
+                          <a href={detail?.artist?.url || '#'} target="_blank" rel="noopener noreferrer" className="block hover:opacity-90 transition-opacity">
+                            <div className="relative w-48 h-64 overflow-hidden rounded-lg shadow-lg">
+                              <Image src={killerData.legacy_header_urls![0]!} alt={`${killerData.name} artwork`} fill className="object-contain" priority/>
+                            </div>
+                            <div className="mt-2 text-center">
+                               <p className="text-sm text-gray-300">Art by {detail?.artist?.name || 'Unknown'}</p>
+                            </div>
+                          </a>
+                        );
+                    })()}
                   </div>
 
                   {/* Center Welcome Text */}
@@ -242,7 +210,7 @@ export default async function KillerPage({ params }: { params: { slug: string } 
                   <div className="flex-shrink-0">
                     <div className="relative w-48 h-64 overflow-hidden rounded-lg shadow-lg">
                       <Image
-                        src={killerData.legacy_header_urls![1]}
+                        src={killerData.legacy_header_urls![1]!}
                         alt={`${killerData.name} perks`}
                         fill
                         className="object-contain"
@@ -265,51 +233,28 @@ export default async function KillerPage({ params }: { params: { slug: string } 
                       You can find links at the bottom of the page to contact me.
                     </p>
                   </div>
-                    <div className="grid grid-cols-2 gap-4">                    {/* Left Image - Artwork */}
-                    <div>                      {getArtistUrlFromLegacyUrl(killerData.legacy_header_urls![0]) ? (
-                        <a 
-                          href={getArtistUrlFromLegacyUrl(killerData.legacy_header_urls![0])!} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="block hover:opacity-90 transition-opacity"
-                        >
-                          <div className="relative aspect-[3/4] overflow-hidden rounded-lg shadow-lg">
-                            <Image
-                              src={killerData.legacy_header_urls![0]}
-                              alt={`${killerData.name} artwork`}
-                              fill
-                              className="object-contain"
-                              priority
-                            />
-                          </div>
-                        </a>
-                      ) : (
-                        <div className="relative aspect-[3/4] overflow-hidden rounded-lg shadow-lg">
-                          <Image
-                            src={killerData.legacy_header_urls![0]}
-                            alt={`${killerData.name} artwork`}
-                            fill
-                            className="object-contain"
-                            priority
-                          />
+                    <div className="grid grid-cols-2 gap-4">
+                        {(() => {
+                            const detail = artworkAnalyticsMap.get(killerData.legacy_header_urls![0]!);
+                            return (
+                                <div>
+                                    <a href={detail?.artist?.url || '#'} target="_blank" rel="noopener noreferrer" className="block hover:opacity-90 transition-opacity">
+                                        <div className="relative aspect-[3/4] overflow-hidden rounded-lg shadow-lg">
+                                            <Image src={killerData.legacy_header_urls![0]!} alt={`${killerData.name} artwork`} fill className="object-contain" priority/>
+                                        </div>
+                                    </a>
+                                    <div className="mt-2 text-center">
+                                        <p className="text-sm text-gray-300">Art by {detail?.artist?.name || 'Unknown'}</p>
+                                    </div>
+                                </div>
+                            );
+                        })()}
+                        <div>
+                            <div className="relative aspect-[3/4] overflow-hidden rounded-lg shadow-lg">
+                                <Image src={killerData.legacy_header_urls![1]!} alt={`${killerData.name} perks`} fill className="object-contain" priority/>
+                            </div>
                         </div>
-                      )}
-                      <div className="mt-2 text-center">
-                        <p className="text-sm text-gray-300">Art by {getArtistFromLegacyUrl(killerData.legacy_header_urls![0])}</p>
-                      </div>
-                    </div>                    {/* Right Image - Perks */}
-                    <div>
-                      <div className="relative aspect-[3/4] overflow-hidden rounded-lg shadow-lg">
-                        <Image
-                          src={killerData.legacy_header_urls![1]}
-                          alt={`${killerData.name} perks`}
-                          fill
-                          className="object-contain"
-                          priority
-                        />
-                      </div>
                     </div>
-                  </div>
                 </div>
               </div>
             ) : (
@@ -346,101 +291,32 @@ export default async function KillerPage({ params }: { params: { slug: string } 
               </>
             )}            {/* P100 Players List with Side Artist Galleries */}
             <div className="mb-10 relative">
-              {/* Left Side Artist Gallery - Full Size, No Shrinking */}
-              {killerData.artist_urls && killerData.artist_urls.length > 0 && (
+              {/* Left Side Artist Gallery */}
               <div className="hidden xl:block absolute -left-96 top-0 w-80 space-y-6">
-                {killerData.artist_urls.slice(0, Math.ceil(killerData.artist_urls.length / 2)).map((artworkUrl, index) => {
-                const artistInfo = getArtistInfoFromUrl(artworkUrl);
-                return (
-                  <div key={`left-artwork-${index}`} className="relative">
-                  {artistInfo.artistUrl ? (
-                    <a 
-                    href={artistInfo.artistUrl} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="block hover:opacity-90 transition-opacity"
-                    >
-                    <div className="relative overflow-hidden rounded-lg shadow-lg">
-                      <Image
-                      src={artworkUrl}
-                      alt={`${killerData.name} artwork by ${artistInfo.artistName}`}
-                      width={1800}
-                      height={1800}
-                      className="w-full h-auto object-contain"
-                      />
-                    </div>
-                    <div className="mt-2 text-center">
-                      <p className="text-sm text-gray-300">Art by: {artistInfo.artistName}</p>
-                    </div>
+                {galleryArtworkDetails.slice(0, Math.ceil(galleryArtworkDetails.length / 2)).map((detail, index) => (
+                    <a key={`left-artwork-${index}`} href={detail.artist?.url || '#'} target="_blank" rel="noopener noreferrer" className="block hover:opacity-90 transition-opacity">
+                        <div className="relative overflow-hidden rounded-lg shadow-lg">
+                            <Image src={detail.artworkUrl} alt={`${killerData.name} artwork by ${detail.artist?.name || 'Unknown'}`} width={1800} height={1800} className="w-full h-auto object-contain"/>
+                        </div>
+                        <div className="mt-2 text-center">
+                            <p className="text-sm text-gray-300">Art by: {detail.artist?.name || 'Unknown'}</p>
+                        </div>
                     </a>
-                  ) : (
-                    <div className="block">
-                    <div className="relative overflow-hidden rounded-lg shadow-lg">
-                      <Image
-                      src={artworkUrl}
-                      alt={`${killerData.name} artwork by ${artistInfo.artistName}`}
-                      width={1800}
-                      height={1800}
-                      className="w-full h-auto object-contain"
-                      />
-                    </div>
-                    <div className="mt-2 text-center">
-                      <p className="text-sm text-gray-300">Art by: {artistInfo.artistName}</p>
-                    </div>
-                    </div>
-                  )}
-                  </div>
-                );
-               })}
+                ))}
               </div>
-              )}
-              {/* Right Side Artist Gallery - Full Size, No Shrinking */}
-              {killerData.artist_urls && killerData.artist_urls.length > Math.ceil(killerData.artist_urls.length / 2) && (
+              {/* Right Side Artist Gallery */}
               <div className="hidden xl:block absolute -right-96 top-0 w-80 space-y-6">
-                {killerData.artist_urls.slice(Math.ceil(killerData.artist_urls.length / 2)).map((artworkUrl, index) => {
-                const artistInfo = getArtistInfoFromUrl(artworkUrl);
-                return (
-                  <div key={`right-artwork-${index}`} className="relative">
-                  {artistInfo.artistUrl ? (
-                    <a 
-                    href={artistInfo.artistUrl} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="block hover:opacity-90 transition-opacity"
-                    >
-                    <div className="relative overflow-hidden rounded-lg shadow-lg">
-                      <Image
-                      src={artworkUrl}
-                      alt={`${killerData.name} artwork by ${artistInfo.artistName}`}
-                      width={1800}
-                      height={1800}
-                      className="w-full h-auto object-contain"
-                      />
-                    </div>
-                    <div className="mt-2 text-center">
-                      <p className="text-sm text-gray-300">Art by: {artistInfo.artistName}</p>
-                    </div>
+                {galleryArtworkDetails.slice(Math.ceil(galleryArtworkDetails.length / 2)).map((detail, index) => (
+                    <a key={`right-artwork-${index}`} href={detail.artist?.url || '#'} target="_blank" rel="noopener noreferrer" className="block hover:opacity-90 transition-opacity">
+                        <div className="relative overflow-hidden rounded-lg shadow-lg">
+                            <Image src={detail.artworkUrl} alt={`${killerData.name} artwork by ${detail.artist?.name || 'Unknown'}`} width={1800} height={1800} className="w-full h-auto object-contain"/>
+                        </div>
+                        <div className="mt-2 text-center">
+                            <p className="text-sm text-gray-300">Art by: {detail.artist?.name || 'Unknown'}</p>
+                        </div>
                     </a>
-                  ) : (
-                    <div className="block">
-                    <div className="relative overflow-hidden rounded-lg shadow-lg">
-                      <Image
-                      src={artworkUrl}
-                      alt={`${killerData.name} artwork by ${artistInfo.artistName}`}
-                      width={1800}
-                      height={1800}
-                      className="w-full h-auto object-contain"
-                      />
-                    </div>
-                    <div className="mt-2 text-center">
-                      <p className="text-sm text-gray-300">Art by: {artistInfo.artistName}</p>
-                    </div>
-                    </div>
-                  )}          </div>
-                );
-               })}
+                ))}
               </div>
-              )}
 
               <h2 className="text-xl font-mono mb-6 text-center">The P100 {killerData.name} list starts here:</h2>
               {killerData.players.length === 0 ? (
@@ -493,57 +369,27 @@ export default async function KillerPage({ params }: { params: { slug: string } 
               )}
             </div>
             
-            {/* Remaining Artwork Gallery for smaller screens - Full Size */}
-            {killerData.artist_urls && killerData.artist_urls.length > 0 && (
+            {/* Mobile Artwork Gallery */}
+            {galleryArtworkDetails.length > 0 && (
               <div className="mb-12 xl:hidden">
                 <h2 className="text-xl font-mono mb-4 text-center">Artwork Gallery</h2>
-                
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {killerData.artist_urls.map((artworkUrl, index) => {
-                    const artistInfo = getArtistInfoFromUrl(artworkUrl);
-                    return (
-                      <div key={`mobile-artwork-${index}`} className="relative overflow-hidden rounded-lg">
-                        {artistInfo.artistUrl ? (
-                          <a 
-                            href={artistInfo.artistUrl} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="block"
-                          >
-                            <Image
-                              src={artworkUrl}
-                              alt={`${killerData.name} artwork by ${artistInfo.artistName}`}
-                              width={0}
-                              height={0}
-                              sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-                              className="w-full h-auto transition-transform hover:scale-105"
-                              style={{ width: 'auto', height: 'auto' }}
-                              loading="lazy"
-                            />
-                            <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-2 text-center">
-                              <p className="text-sm">Art by: {artistInfo.artistName}</p>
-                            </div>
-                          </a>
-                        ) : (
-                          <div className="block">
-                            <Image
-                              src={artworkUrl}
-                              alt={`${killerData.name} artwork by ${artistInfo.artistName}`}
-                              width={0}
-                              height={0}
-                              sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-                              className="w-full h-auto transition-transform hover:scale-105"
-                              style={{ width: 'auto', height: 'auto' }}
-                              loading="lazy"
-                            />
-                            <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-2 text-center">
-                              <p className="text-sm">Art by: {artistInfo.artistName}</p>
-                            </div>
-                          </div>
-                        )}
+                  {galleryArtworkDetails.map((detail, index) => (
+                    <a key={`mobile-artwork-${index}`} href={detail.artist?.url || '#'} target="_blank" rel="noopener noreferrer" className="block">
+                      <div className="relative overflow-hidden rounded-lg">
+                        <Image
+                          src={detail.artworkUrl}
+                          alt={`${killerData.name} artwork by ${detail.artist?.name || 'Unknown'}`}
+                          width={0} height={0} sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+                          className="w-full h-auto transition-transform hover:scale-105"
+                          style={{ width: 'auto', height: 'auto' }} loading="lazy"
+                        />
+                        <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-2 text-center">
+                          <p className="text-sm">Art by: {detail.artist?.name || 'Unknown'}</p>
+                        </div>
                       </div>
-                    );
-                  })}
+                    </a>
+                  ))}
                 </div>
               </div>
             )}
