@@ -11,7 +11,7 @@ import GlobalRealtimeRefresher from "@/components/GlobalRealTimeRefresher";
 const inter = Inter({ subsets: ["latin"] });
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
-
+export const runtime = 'edge'; 
 export const metadata: Metadata = {
   title: "The Ultimate P100 List Library",
   description: "A comprehensive collection of P100 killers and survivors in Dead by Daylight",
