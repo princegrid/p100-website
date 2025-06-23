@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build && echo '{\"excludeFiles\": [\"scripts/**/*\"]}' > .next.config.json",
     "start": "next start",
     "lint": "next lint"
   },
