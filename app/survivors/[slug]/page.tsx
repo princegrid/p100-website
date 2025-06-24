@@ -8,7 +8,6 @@ import CharacterNavigation from '@/components/CharacterNavigation';
 import { createServerClient } from '@/lib/supabase-client';
 import { getCharacterNavigation } from '@/lib/character-navigation';
 import { analyzeCharacterArtworks, logDetailedArtworkAnalysis } from '@/lib/artist-analytics';
-import PlayerName from '@/components/PlayerName';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -320,7 +319,7 @@ export default async function SurvivorPage({ params }: { params: { slug: string 
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
                       {survivorData.players.map((player) => {
-                        const isLongName = player.username.replace(/\s/g, '').length > 15;
+                        const isLongName = player.username.replace(/\s/g, '').length > 13;
                         const nameClasses = `font-mono text-sm text-gray-200 truncate ${isLongName ? "group-hover:absolute group-hover:z-10 group-hover:top-1/2 group-hover:left-1/2 group-hover:-translate-y-1/2 group-hover:-translate-x-1/2 group-hover:w-auto group-hover:whitespace-nowrap group-hover:overflow-visible group-hover:bg-black group-hover:p-2 group-hover:rounded-md group-hover:ring-1 group-hover:ring-red-500 group-hover:scale-110 transition-transform duration-200 ease-in-out" : ""}`;
 
                         return (
