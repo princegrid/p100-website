@@ -99,6 +99,8 @@ async function getAllArtists(supabase: SupabaseClient<Database>): Promise<Artist
     console.error("Error fetching all artists:", error.message);
     return [];
   }
+  // ADD THIS LINE
+  console.log(`[Artist Analytics] Fetched ${data?.length || 0} artists from the database.`);
   return data || [];
 }
 
