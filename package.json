@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build && echo '{\"excludeFiles\": [\"scripts/**/*\"]}' > .next.config.json",
+    "b": "next build && echo '{\"excludeFiles\": [\"scripts/**/*\"]}' > .next.config.json",
     "start": "next start",
+    "s": "next start",
     "lint": "next lint"
   },
   "dependencies": {
