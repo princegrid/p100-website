@@ -64,12 +64,24 @@ function extractArtistIdentifierFromUrl(url: string): string | null {
     const decodedUrl = decodeURIComponent(url);
     const filename = decodedUrl.substring(decodedUrl.lastIndexOf('/') + 1);
     
-    // Regex to match "art by [name]" case-insensitively and capture the name.
-    const match = filename.match(/ by (.+)\./i);    
-    if (match && match[1]) {
-      return match[1].trim(); // Return the captured group (the artist's name/slug)
+    // Remove the file extension to simplify matching
+    const namePart = filename.substring(0, filename.lastIndexOf('.'));
+
+    let artistIdentifier: string | null = null;
+
+    // Check for different "by" separators, from most specific to least
+    if (namePart.includes('-by-')) {
+      // Handles "art-by-artist"
+      artistIdentifier = namePart.split('-by-').pop() || null;
+    } else if (namePart.includes(' by ')) {
+      // Handles "art by artist" or "ss by artist"
+      artistIdentifier = namePart.split(' by ').pop() || null;
     }
-    return null;
+    // You can add more 'else if' conditions here for other patterns in the future
+
+    // Return the trimmed result if found, otherwise null
+    return artistIdentifier ? artistIdentifier.trim() : null;
+
   } catch (e) {
     console.error("Error parsing artwork URL:", url, e);
     return null;
