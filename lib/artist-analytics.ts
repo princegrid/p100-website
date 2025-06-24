@@ -65,8 +65,7 @@ function extractArtistIdentifierFromUrl(url: string): string | null {
     const filename = decodedUrl.substring(decodedUrl.lastIndexOf('/') + 1);
     
     // Regex to match "art by [name]" case-insensitively and capture the name.
-    const match = filename.match(/art by (.+)\./i);
-    
+    const match = filename.match(/ by (.+)\./i);    
     if (match && match[1]) {
       return match[1].trim(); // Return the captured group (the artist's name/slug)
     }
