@@ -154,7 +154,7 @@ export default function AdminPage() {
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
 
   // List of available buckets
-  const buckets = ['killerimages', 'backgrounds', 'survivors', 'screenshots', 'artworks'];
+  const buckets = ['killerimages', 'backgrounds', 'survivorbackgrounds', 'survivors', 'screenshots', 'artworks'];
 
   // Initial Auth Check and Data Fetch
   useEffect(() => {
@@ -521,7 +521,6 @@ export default function AdminPage() {
   const saveArtist = async (artistData: any) => {
     try {
         const supabase = createAdminClient();
-        // *** THE FIX IS HERE: Exclude 'slug' from the update payload ***
         const { id, created_at, slug, ...updateData } = artistData; 
         
         if (id && artists.find(a => a.id === id)) {
@@ -661,7 +660,10 @@ export default function AdminPage() {
   // --- FILE PICKER FUNCTIONS ---
   const openFilePicker = (type: 'single' | 'multiple', field: 'header_url' | 'background_image_url' | 'artist_urls' | 'legacy_header_urls' | 'image_url', entityType: 'killer' | 'survivor') => {
     let defaultBucket = 'artworks';
-    if (field === 'background_image_url' || field === 'header_url') {
+    
+    if (entityType === 'survivor' && field === 'background_image_url') {
+        defaultBucket = 'survivorbackgrounds';
+    } else if (field === 'background_image_url' || field === 'header_url') {
         defaultBucket = 'backgrounds';
     } else if ((entityType === 'killer' || entityType === 'survivor') && field === 'image_url') {
         defaultBucket = entityType === 'killer' ? 'killerimages' : 'survivors';
@@ -670,6 +672,7 @@ export default function AdminPage() {
     } else if (entityType === 'survivor' && field === 'legacy_header_urls') {
         defaultBucket = 'survivors';
     }
+    
     setFilePickerBucket(defaultBucket);
     setFilePickerMode({ type, field, entityType });
     setSelectedFiles([]);
