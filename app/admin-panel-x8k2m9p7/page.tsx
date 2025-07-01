@@ -116,6 +116,9 @@ export default function AdminPage() {
   const [p100Players, setP100Players] = useState<any[]>([]);
   const [artists, setArtists] = useState<Artist[]>([]);
   
+  // UI State
+  const [activeTab, setActiveTab] = useState('submissions');
+  
   // Filter States
   const [filter, setFilter] = useState<'all' | 'killer' | 'survivor'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('pending');
@@ -146,6 +149,7 @@ export default function AdminPage() {
   // File Picker States
   const [showFilePicker, setShowFilePicker] = useState(false);
   const [filePickerBucket, setFilePickerBucket] = useState<string>('artworks');
+  const [filePickerSearchTerm, setFilePickerSearchTerm] = useState('');
   const [filePickerMode, setFilePickerMode] = useState<{
     type: 'single' | 'multiple';
     field: 'header_url' | 'background_image_url' | 'artist_urls' | 'legacy_header_urls' | 'image_url';
@@ -214,6 +218,7 @@ export default function AdminPage() {
   // Re-fetch files in picker when bucket changes
   useEffect(() => {
       if (showFilePicker) {
+          setFilePickerSearchTerm(''); // Reset on bucket change
           fetchStorageItems(filePickerBucket);
       }
   }, [filePickerBucket, showFilePicker]);
@@ -301,29 +306,42 @@ export default function AdminPage() {
     setLoadingStorage(true);
     try {
         const supabase = createAdminClient();
-        let allItems: StorageItem[] = [];
+        const allItems: StorageItem[] = [];
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 
         const listItemsRecursively = async (pathPrefix = '') => {
-            const { data, error } = await supabase.storage.from(bucket).list(pathPrefix, { limit: 1000 });
-            if (error) throw error;
-
-            for (const item of data) {
-                const fullPath = pathPrefix ? `${pathPrefix}/${item.name}` : item.name;
-                if (item.id === null) { 
-                    await listItemsRecursively(fullPath);
-                } else {
-                    const { data: { publicUrl } } = supabase.storage.from(bucket).getPublicUrl(fullPath);
-                    allItems.push({
-                        name: item.name,
-                        path: fullPath,
-                        bucket,
-                        publicUrl,
-                        created_at: item.created_at || new Date().toISOString(),
-                        updated_at: item.updated_at || new Date().toISOString(),
-                        size: item.metadata?.size || 0,
-                    });
-                }
+            const { data, error } = await supabase.storage.from(bucket).list(pathPrefix, { limit: 1000, sortBy: { column: 'name', order: 'asc' } });
+            
+            if (error) {
+                console.error(`Error listing items in bucket "${bucket}" at path "${pathPrefix}":`, error.message);
+                return;
             }
+            if (!data) return;
+
+            const files = data.filter(item => item.id !== null);
+            const folders = data.filter(item => item.id === null);
+
+            for (const file of files) {
+                const fullPath = pathPrefix ? `${pathPrefix}/${file.name}` : file.name;
+                const publicUrl = `${supabaseUrl}/storage/v1/object/public/${bucket}/${encodeURI(fullPath)}`;
+                
+                allItems.push({
+                    name: file.name,
+                    path: fullPath,
+                    bucket,
+                    publicUrl,
+                    created_at: file.created_at || new Date().toISOString(),
+                    updated_at: file.updated_at || new Date().toISOString(),
+                    size: file.metadata?.size || 0,
+                });
+            }
+
+            const folderPromises = folders.map(folder => {
+                const fullPath = pathPrefix ? `${pathPrefix}/${folder.name}` : folder.name;
+                return listItemsRecursively(fullPath);
+            });
+
+            await Promise.all(folderPromises);
         };
 
         await listItemsRecursively();
@@ -676,6 +694,7 @@ export default function AdminPage() {
     setFilePickerBucket(defaultBucket);
     setFilePickerMode({ type, field, entityType });
     setSelectedFiles([]);
+    setFilePickerSearchTerm('');
     setShowFilePicker(true);
   };
 
@@ -733,6 +752,10 @@ export default function AdminPage() {
     return typeMatch && statusMatch;
   });
 
+  const filteredStorageItems = storageItems.filter(item => 
+      item.path.toLowerCase().includes(filePickerSearchTerm.toLowerCase())
+  );
+
   if (!isAuthenticated) {
     return (
       <BackgroundWrapper backgroundUrl="/admin.png">
@@ -773,7 +796,7 @@ export default function AdminPage() {
           <Button onClick={handleLogout} variant="outline" className="border-red-600 text-white hover:bg-red-900">Logout</Button>
         </div>
 
-        <Tabs defaultValue="submissions" className="space-y-6">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList className="bg-black border border-red-600">
             <TabsTrigger value="submissions" className="data-[state=active]:bg-red-600">Submissions</TabsTrigger>
             <TabsTrigger value="killers-table" className="data-[state=active]:bg-red-600">Killers</TabsTrigger>
@@ -866,7 +889,7 @@ export default function AdminPage() {
             <div className="bg-black/80 backdrop-blur-sm border border-red-600 rounded-lg p-6">
                 <div className="flex justify-between items-center mb-6">
                     <h2 className="text-2xl font-bold text-white">Survivors Database</h2>
-                    <Button onClick={() => setEditingSurvivor({ name: '', id: '', image_url: '', background_image_url: '', artist_urls: [], legacy_header_urls: [], order_num: allSurvivors.length + 1 })} className="bg-green-600 hover:bg-green-700">Add New Survivor</Button>
+                    <Button onClick={() => setEditingSurvivor({ name: '', id: '', image_url: '', background_image_url: '', header_url: '', artist_urls: [], legacy_header_urls: [], order_num: allSurvivors.length + 1 })} className="bg-green-600 hover:bg-green-700">Add New Survivor</Button>
                 </div>
                 {loading ? <div className="text-white text-center py-8">Loading...</div> : (
                     <div className="overflow-x-auto"><Table><TableHeader><TableRow className="border-red-600/50"><TableHead className="text-white">Image</TableHead><TableHead className="text-white">Name</TableHead><TableHead className="text-white">ID</TableHead><TableHead className="text-white">Order</TableHead><TableHead className="text-white">Actions</TableHead></TableRow></TableHeader><TableBody>
@@ -976,16 +999,19 @@ export default function AdminPage() {
         {/* DIALOGS (MODALS) */}
         {editingKiller && (
             <Dialog open={!!editingKiller} onOpenChange={() => setEditingKiller(null)}>
-                <DialogContent className="bg-black border-red-600 max-w-2xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle className="text-white">{editingKiller.id ? 'Edit Killer' : 'Add New Killer'}</DialogTitle></DialogHeader>
-                    <div className="space-y-4">
+                <DialogContent className="bg-black border-red-600 max-w-2xl h-[90vh] flex flex-col">
+                    <DialogHeader className="flex-shrink-0"><DialogTitle className="text-white">{editingKiller.id ? 'Edit Killer' : 'Add New Killer'}</DialogTitle></DialogHeader>
+                    <div className="flex-grow overflow-y-auto pr-4 space-y-4">
                         <div><Label className="text-white">Name</Label><Input value={editingKiller.name} onChange={(e) => setEditingKiller({...editingKiller, name: e.target.value})} className="bg-black border-red-600 text-white"/></div>
                         <div><Label className="text-white">ID</Label><Input value={editingKiller.id} onChange={(e) => setEditingKiller({...editingKiller, id: e.target.value})} className="bg-black border-red-600 text-white" disabled={!!editingKiller.created_at}/></div>
                         <div><Label className="text-white">Image URL</Label><div className="flex gap-2"><Input value={editingKiller.image_url || ''} onChange={(e) => setEditingKiller({...editingKiller, image_url: e.target.value})} className="bg-black border-red-600 text-white flex-1"/><Button onClick={() => openFilePicker('single', 'image_url', 'killer')} className="bg-blue-600 hover:bg-blue-700" type="button">Browse</Button></div></div>
                         <div><Label className="text-white">Background URL</Label><div className="flex gap-2"><Input value={editingKiller.background_image_url || ''} onChange={(e) => setEditingKiller({...editingKiller, background_image_url: e.target.value})} className="bg-black border-red-600 text-white flex-1"/><Button onClick={() => openFilePicker('single', 'background_image_url', 'killer')} className="bg-blue-600 hover:bg-blue-700" type="button">Browse</Button></div></div>
                         <div><Label className="text-white">Header URL</Label><div className="flex gap-2"><Input value={editingKiller.header_url || ''} onChange={(e) => setEditingKiller({...editingKiller, header_url: e.target.value})} className="bg-black border-red-600 text-white flex-1"/><Button onClick={() => openFilePicker('single', 'header_url', 'killer')} className="bg-blue-600 hover:bg-blue-700" type="button">Browse</Button></div></div>
-                        <div><Label className="text-white">Artist URLs</Label><Button onClick={() => openFilePicker('multiple', 'artist_urls', 'killer')} className="bg-blue-600 hover:bg-blue-700 w-full" type="button">Add Artist URLs</Button>{(editingKiller.artist_urls || []).map((url: string, i: number) => <div key={i} className="flex items-center gap-2 text-sm text-gray-300"><span className="truncate flex-1">{url}</span><Button onClick={() => removeUrlFromField(url, 'artist_urls', 'killer')} size="sm" variant="destructive" className="h-6">X</Button></div>)}</div>
-                        <div><Label className="text-white">Legacy Header URLs</Label><Button onClick={() => openFilePicker('multiple', 'legacy_header_urls', 'killer')} className="bg-blue-600 hover:bg-blue-700 w-full" type="button">Add Legacy URLs</Button>{(editingKiller.legacy_header_urls || []).map((url: string, i: number) => <div key={i} className="flex items-center gap-2 text-sm text-gray-300"><span className="truncate flex-1">{url}</span><Button onClick={() => removeUrlFromField(url, 'legacy_header_urls', 'killer')} size="sm" variant="destructive" className="h-6">X</Button></div>)}</div>
+                        <div><Label className="text-white">Artist URLs</Label><Button onClick={() => openFilePicker('multiple', 'artist_urls', 'killer')} className="bg-blue-600 hover:bg-blue-700 w-full mb-2" type="button">Add Artist URLs</Button><div className="max-h-32 overflow-y-auto space-y-1 rounded border border-red-800 p-2 bg-black/50">{(editingKiller.artist_urls || []).map((url: string, i: number) => <div key={i} className="flex items-center gap-2 text-sm text-gray-300"><span className="truncate flex-1">{url}</span><Button onClick={() => removeUrlFromField(url, 'artist_urls', 'killer')} size="sm" variant="destructive" className="h-6 w-6 p-0">X</Button></div>)}</div></div>
+                        <div><Label className="text-white">Legacy Header URLs</Label><Button onClick={() => openFilePicker('multiple', 'legacy_header_urls', 'killer')} className="bg-blue-600 hover:bg-blue-700 w-full mb-2" type="button">Add Legacy URLs</Button><div className="max-h-32 overflow-y-auto space-y-1 rounded border border-red-800 p-2 bg-black/50">{(editingKiller.legacy_header_urls || []).map((url: string, i: number) => <div key={i} className="flex items-center gap-2 text-sm text-gray-300"><span className="truncate flex-1">{url}</span><Button onClick={() => removeUrlFromField(url, 'legacy_header_urls', 'killer')} size="sm" variant="destructive" className="h-6 w-6 p-0">X</Button></div>)}</div></div>
                         <div><Label className="text-white">Order</Label><Input type="number" value={editingKiller.order || 0} onChange={(e) => setEditingKiller({...editingKiller, order: parseInt(e.target.value)})} className="bg-black border-red-600 text-white"/></div>
+                    </div>
+                    <div className="flex-shrink-0 pt-4 border-t border-red-600/50">
                         <div className="flex gap-2"><Button onClick={() => saveKiller(editingKiller)} className="bg-green-600 hover:bg-green-700">Save</Button><Button onClick={() => setEditingKiller(null)} variant="outline" className="border-red-600 text-white hover:bg-red-900">Cancel</Button></div>
                     </div>
                 </DialogContent>
@@ -994,15 +1020,19 @@ export default function AdminPage() {
 
         {editingSurvivor && (
             <Dialog open={!!editingSurvivor} onOpenChange={() => setEditingSurvivor(null)}>
-                <DialogContent className="bg-black border-red-600 max-w-2xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle className="text-white">{editingSurvivor.id ? 'Edit Survivor' : 'Add New Survivor'}</DialogTitle></DialogHeader>
-                    <div className="space-y-4">
+                <DialogContent className="bg-black border-red-600 max-w-2xl h-[90vh] flex flex-col">
+                    <DialogHeader className="flex-shrink-0"><DialogTitle className="text-white">{editingSurvivor.id ? 'Edit Survivor' : 'Add New Survivor'}</DialogTitle></DialogHeader>
+                    <div className="flex-grow overflow-y-auto pr-4 space-y-4">
                         <div><Label className="text-white">Name</Label><Input value={editingSurvivor.name} onChange={(e) => setEditingSurvivor({...editingSurvivor, name: e.target.value})} className="bg-black border-red-600 text-white"/></div>
                         <div><Label className="text-white">ID</Label><Input value={editingSurvivor.id} onChange={(e) => setEditingSurvivor({...editingSurvivor, id: e.target.value})} className="bg-black border-red-600 text-white" disabled={!!editingSurvivor.created_at}/></div>
                         <div><Label className="text-white">Image URL</Label><div className="flex gap-2"><Input value={editingSurvivor.image_url || ''} onChange={(e) => setEditingSurvivor({...editingSurvivor, image_url: e.target.value})} className="bg-black border-red-600 text-white flex-1"/><Button onClick={() => openFilePicker('single', 'image_url', 'survivor')} className="bg-blue-600 hover:bg-blue-700" type="button">Browse</Button></div></div>
                         <div><Label className="text-white">Background URL</Label><div className="flex gap-2"><Input value={editingSurvivor.background_image_url || ''} onChange={(e) => setEditingSurvivor({...editingSurvivor, background_image_url: e.target.value})} className="bg-black border-red-600 text-white flex-1"/><Button onClick={() => openFilePicker('single', 'background_image_url', 'survivor')} className="bg-blue-600 hover:bg-blue-700" type="button">Browse</Button></div></div>
-                        <div><Label className="text-white">Artist URLs</Label><Button onClick={() => openFilePicker('multiple', 'artist_urls', 'survivor')} className="bg-blue-600 hover:bg-blue-700 w-full" type="button">Add Artist URLs</Button>{(editingSurvivor.artist_urls || []).map((url: string, i: number) => <div key={i} className="flex items-center gap-2 text-sm text-gray-300"><span className="truncate flex-1">{url}</span><Button onClick={() => removeUrlFromField(url, 'artist_urls', 'survivor')} size="sm" variant="destructive" className="h-6">X</Button></div>)}</div>
-                        <div><Label className="text-white">Legacy Header URLs</Label><Button onClick={() => openFilePicker('multiple', 'legacy_header_urls', 'survivor')} className="bg-blue-600 hover:bg-blue-700 w-full" type="button">Add Legacy URLs</Button>{(editingSurvivor.legacy_header_urls || []).map((url: string, i: number) => <div key={i} className="flex items-center gap-2 text-sm text-gray-300"><span className="truncate flex-1">{url}</span><Button onClick={() => removeUrlFromField(url, 'legacy_header_urls', 'survivor')} size="sm" variant="destructive" className="h-6">X</Button></div>)}</div>
+                        <div><Label className="text-white">Header URL</Label><div className="flex gap-2"><Input value={editingSurvivor.header_url || ''} onChange={(e) => setEditingSurvivor({...editingSurvivor, header_url: e.target.value})} className="bg-black border-red-600 text-white flex-1"/><Button onClick={() => openFilePicker('single', 'header_url', 'survivor')} className="bg-blue-600 hover:bg-blue-700" type="button">Browse</Button></div></div>
+                        <div><Label className="text-white">Artist URLs</Label><Button onClick={() => openFilePicker('multiple', 'artist_urls', 'survivor')} className="bg-blue-600 hover:bg-blue-700 w-full mb-2" type="button">Add Artist URLs</Button><div className="max-h-32 overflow-y-auto space-y-1 rounded border border-red-800 p-2 bg-black/50">{(editingSurvivor.artist_urls || []).map((url: string, i: number) => <div key={i} className="flex items-center gap-2 text-sm text-gray-300"><span className="truncate flex-1">{url}</span><Button onClick={() => removeUrlFromField(url, 'artist_urls', 'survivor')} size="sm" variant="destructive" className="h-6 w-6 p-0">X</Button></div>)}</div></div>
+                        <div><Label className="text-white">Legacy Header URLs</Label><Button onClick={() => openFilePicker('multiple', 'legacy_header_urls', 'survivor')} className="bg-blue-600 hover:bg-blue-700 w-full mb-2" type="button">Add Legacy URLs</Button><div className="max-h-32 overflow-y-auto space-y-1 rounded border border-red-800 p-2 bg-black/50">{(editingSurvivor.legacy_header_urls || []).map((url: string, i: number) => <div key={i} className="flex items-center gap-2 text-sm text-gray-300"><span className="truncate flex-1">{url}</span><Button onClick={() => removeUrlFromField(url, 'legacy_header_urls', 'survivor')} size="sm" variant="destructive" className="h-6 w-6 p-0">X</Button></div>)}</div></div>
                         <div><Label className="text-white">Order</Label><Input type="number" value={editingSurvivor.order_num || 0} onChange={(e) => setEditingSurvivor({...editingSurvivor, order_num: parseInt(e.target.value)})} className="bg-black border-red-600 text-white"/></div>
+                    </div>
+                     <div className="flex-shrink-0 pt-4 border-t border-red-600/50">
                         <div className="flex gap-2"><Button onClick={() => saveSurvivor(editingSurvivor)} className="bg-green-600 hover:bg-green-700">Save</Button><Button onClick={() => setEditingSurvivor(null)} variant="outline" className="border-red-600 text-white hover:bg-red-900">Cancel</Button></div>
                     </div>
                 </DialogContent>
@@ -1057,12 +1087,24 @@ export default function AdminPage() {
                 <DialogHeader>
                     <DialogTitle className="text-white">Select Files: {filePickerMode.field.replace(/_/g, ' ')}</DialogTitle>
                 </DialogHeader>
-                <div className="flex-shrink-0 p-4 border-b border-red-600/50">
-                    <Label className="text-white">Bucket</Label>
-                    <Select value={filePickerBucket} onValueChange={setFilePickerBucket}>
-                        <SelectTrigger className="bg-black border-red-600 text-white mt-1"><SelectValue /></SelectTrigger>
-                        <SelectContent className="bg-black border-red-600">{buckets.map(b => <SelectItem key={b} value={b}>{b}</SelectItem>)}</SelectContent>
-                    </Select>
+                <div className="flex-shrink-0 p-4 border-b border-red-600/50 space-y-4">
+                    <div>
+                      <Label className="text-white">Bucket</Label>
+                      <Select value={filePickerBucket} onValueChange={setFilePickerBucket}>
+                          <SelectTrigger className="bg-black border-red-600 text-white mt-1"><SelectValue /></SelectTrigger>
+                          <SelectContent className="bg-black border-red-600">{buckets.map(b => <SelectItem key={b} value={b}>{b}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-white">Search Files</Label>
+                      <Input 
+                          type="text" 
+                          placeholder="Search by name or path..." 
+                          className="bg-black border-red-600 text-white mt-1 w-full" 
+                          value={filePickerSearchTerm} 
+                          onChange={(e) => setFilePickerSearchTerm(e.target.value)} 
+                      />
+                    </div>
                 </div>
                 <div className="flex-grow overflow-y-auto p-4 space-y-4">
                     {loadingStorage ? (
@@ -1070,7 +1112,7 @@ export default function AdminPage() {
                         <p className="text-white">Loading files...</p>
                       </div>
                     ) : (
-                      Object.entries(storageItems.reduce((acc, item) => {
+                      Object.entries(filteredStorageItems.reduce((acc, item) => {
                           const folder = item.path.includes('/') ? item.path.split('/')[0] : 'Root';
                           if (!acc[folder]) acc[folder] = [];
                           acc[folder].push(item);
