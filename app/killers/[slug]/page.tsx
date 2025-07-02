@@ -222,6 +222,7 @@ export default async function KillerPage({ params }: { params: { slug: string } 
                     })()}
                     <div>
                       <div className="relative aspect-[3/4] overflow-hidden rounded-lg shadow-lg">
+                      // 
                         <Image src={killerData.legacy_header_urls![1]!} alt={`${killerData.name} perks`} fill className="object-contain" priority/>
                       </div>
                     </div>
@@ -234,7 +235,7 @@ export default async function KillerPage({ params }: { params: { slug: string } 
                 {killerData.header_url && (
                   <div className="mb-8">
                     <div className="relative h-48 md:h-64 lg:h-80 w-full overflow-hidden rounded-lg">
-                      <Image src={killerData.header_url} alt={`${killerData.name} header`} fill className="object-cover" priority/>
+                      <Image src={killerData.header_url} alt={`${killerData.name} header`} fill className="object-contain" priority/>
                     </div>
                   </div>
                 )}

@@ -266,7 +266,7 @@ export default async function SurvivorPage({ params }: { params: { slug: string 
                 {survivorData.header_url && (
                   <div className="mb-8">
                     <div className="relative h-48 md:h-64 lg:h-80 w-full overflow-hidden rounded-lg">
-                      <Image src={survivorData.header_url} alt={`${survivorData.name} header`} fill className="object-cover" priority/>
+                      <Image src={survivorData.header_url} alt={`${survivorData.name} header`} fill className="object-contain" priority/>
                     </div>
                   </div>
                 )}
